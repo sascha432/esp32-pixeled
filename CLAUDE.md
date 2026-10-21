@@ -15,7 +15,11 @@
 - **Feature list with every change.** `README.md` starts with the list of features. A feature that
   is new, changed or gone changes the list in the same commit; keep it short, one line per point.
 - **Docs with every change.** Update the affected `docs/*.md` (architecture, leds, adding-a-board,
-  CHANGELOG, the pages under `docs/ui/web`) in the same commit as the code. Check `docs/TODO.md`:
+  the pages under `docs/ui/web`) in the same commit as the code. Check `docs/TODO.md`:
   mark items done or changed, add new open points, update the state lines.
+- **Changelog with every change.** `docs/CHANGELOG.md`: an entry under today's date (newest
+  first, inside the unreleased version), under Added, Changed, Fixed or Removed, saying what a
+  user or developer sees. A change that reverses an entry of the same day replaces it instead of
+  adding a second one.
 - **No code from kfc_fw.** `../kfc_fw` (the clock and LED matrix plugin) is the reference for
   features and behavior only.
