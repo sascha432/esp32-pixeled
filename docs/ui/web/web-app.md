@@ -1,6 +1,6 @@
 # Web app
 
-The setup, login, LEDs, Layout, Status, Wi-Fi, Hotspot, Logs and System pages in `web/`; the LED
+The setup, login, LEDs, Layout, Status, Wi-Fi, Hotspot, MQTT, Time, Logs and System pages in `web/`; the LED
 pages are in `web/leds.js`, loaded on their first visit ([leds.md](../../leds.md)). The look, the page frame and how a page is built:
 [web-design.md](web-design.md). The built-in recovery page and the recovery app:
 [web-recovery.md](web-recovery.md).
@@ -20,6 +20,7 @@ Main pages                after login (the first one: LEDs)
   Wi-Fi                   saved networks (up to 5), add, forget, reconnect
   Hotspot                 on or off, name, password (none during the setup), new password
   MQTT                    broker, login, discovery prefix, topics; the connection's state
+  Time                    the clock, time zone, two SNTP servers
   Logs                    view and filter, debug mode
   System                  backup (export and import), firmware and file system update,
                           restart, factory reset
@@ -175,6 +176,20 @@ it, "Forget the password" removes it), the discovery prefix (`homeassistant`) an
 `GET /api/mqtt`, `POST /api/mqtt` (`enabled`, `uri`, `username`, `password`, `forget_password`,
 `prefix`, `base`). Backup section `mqtt` without the password (a comment says where it may go).
 
+**Time.** The card "Clock" (the local time or "not set", the time zone, how long ago a server
+last answered; refreshed every second) and the form "Settings": the time zone (the IANA names of
+the firmware grouped by region, "UTC (none set)" first, and "This browser's" when the browser's
+zone is in the list) and time server 1 and 2 (a host name or an address of up to 63 characters,
+the defaults `pool.ntp.org` and `time.cloudflare.com` as placeholders: both empty uses them, one
+empty is not asked); Save. New servers restart SNTP, which asks at once when the Wi-Fi is up; the
+clock keeps its time until one answers. Both are written at once and kept in NVS (`time/zone`,
+`time/server1`, `time/server2`). Code: `components/platform` (`time_sync.cpp`),
+`components/webserver/src/api_time.cpp`, registered by main. API: `GET /api/time` (`synced`,
+`now`, `local`, `zone`, `last_sync`, `servers`, `defaults`), `POST /api/time` (any of `zone`,
+empty for UTC, `server1`, `server2`; a zone the firmware does not know or a bad name is a 400 and
+nothing changes), `GET /api/time/zones` (the names, sorted). Backup section `time` (`zone`,
+`server_1`, `server_2`). Not in the recovery app (404); its Time page says so.
+
 **Layout.** Two columns on a wide screen: the form and the preview. The form has the canvas width
 and height and one box per panel: lane (the board's lanes), X, Y, width, height, the first LED (a
 corner), whether the LEDs run along rows or columns, zigzag. Add panel (next lane, to the right of
@@ -222,7 +237,7 @@ kept in the browser, a double-click goes back to the default. API: `GET /api/log
 backup card sits above the update card, so the backup is seen before an update.
 
 Backup: one YAML file in two parts, the settings (the sections `network`, `leds` (state, power
-and timing, canvas and panels) and `webui`, import only, section 3) and the presets (none yet); Export all,
+and timing, canvas and panels), `audio`, `mqtt`, `time` and `webui`, import only, section 3) and the presets (none yet); Export all,
 Settings only, Presets only (`GET /api/backup.yaml[?parts=settings|presets]`). A section of
 something the device does not have is not written, and in a file from another device it is
 ignored ("... (not on this device)"). No password is written; a Wi-Fi `password:` added to the

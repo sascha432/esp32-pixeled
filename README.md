@@ -15,7 +15,9 @@ Built:
 * Wi-Fi with up to 5 networks, entered order or strongest signal, roaming on a weak signal.
 * Hotspot with a captive portal for the first setup (open while setting up), mDNS
   `<device>.local`.
-* Web UI: status, Wi-Fi, hotspot, log, system (update, backup, restart, files), login.
+* Web UI: status, Wi-Fi, hotspot, MQTT, time, log, system (update, backup, restart, files), login.
+* Clock over SNTP: time zone and two servers on the web UI's Time page (pool.ntp.org and
+  time.cloudflare.com as built), in the backup.
 * Firmware and file system updates by upload or URL, rollback, a recovery app in the factory
   partition.
 * Backup of the settings in one YAML file (settings and presets parts).

@@ -291,7 +291,7 @@ esp_err_t start(const Config &config)
 
     httpd_config_t server_config = HTTPD_DEFAULT_CONFIG();
     server_config.uri_match_fn = httpd_uri_match_wildcard;
-    server_config.max_uri_handlers = 48;
+    server_config.max_uri_handlers = 56;
     // browsers keep connections open; with all sessions taken the oldest is closed (LRU). Sessions
     // + 2 of the server + the captive DNS must stay within CONFIG_LWIP_MAX_SOCKETS (16).
     server_config.max_open_sockets = 12;

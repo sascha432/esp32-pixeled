@@ -16,6 +16,9 @@ pin in the panic handler (`crash yes` with the LEDs on, below 10 W).
 matrix (bench sent the frame before the console's power limit), far above 10 W; the board browned
 out and was power cycled. Bench now sends the limited frame. Check the matrix and its supply.
 
+**Time page (2026-10-21, working on the test matrix):** the time zone and the SNTP servers,
+`/api/time`, backup section `time`. Not tried: the backup section's import.
+
 **NVS write policy (2026-10-21, [architecture.md](architecture.md) section 9.3):** the delayed
 write ported from hassctrl (10 s, at most 60 s, 8 keys, discarded by a factory reset); the LED
 styles take it. Not tried: the factory reset path (it erases the test board's settings).

@@ -268,8 +268,8 @@ fits every wiring of a board (not built: `main` uses the board's pins as they ar
   | Kind of value | Written | Examples |
   | --- | --- | --- |
   | changed by a live control or by using the device, in bursts | `platform::set_blob_later`: 10 s after the last change, at most 60 s after the first, and at a restart | `leds/state` (on, brightness, animation, color, speed), `leds/styles` (rotation, reactive, strength, attack, release; sliders and Home Assistant numbers) |
-  | saved by an explicit action (Save, a form), or a secret | at once, with commit; a failure is reported | Wi-Fi networks, policy and hotspot, web UI login, MQTT settings and password, LED layout, config, lanes, overlay, auto off, audio settings and inputs |
-  | device state that changes rarely | at once, when it changed | `leds/boot` (switched off by motion), `network/last_seen`, the time zone |
+  | saved by an explicit action (Save, a form), or a secret | at once, with commit; a failure is reported | Wi-Fi networks, policy and hotspot, web UI login, MQTT settings and password, time zone and SNTP servers, LED layout, config, lanes, overlay, auto off, audio settings and inputs |
+  | device state that changes rarely | at once, when it changed | `leds/boot` (switched off by motion), `network/last_seen` |
   | developer and calibration | at once | console log level, `logbuf/debug`, the light sensor |
 
   Nothing writes per frame: a value that can change more often than about once a minute takes
@@ -282,7 +282,7 @@ fits every wiring of a board (not built: `main` uses the board's pins as they ar
   (`config::backup::Part`). The sections come from a table filled in `main/backup.cpp`; each
   writes its fields and reads them back. An import is checked completely first and applied only
   when no section found a problem. Never a password in an export; an import may carry them,
-  added by hand. Built sections: `network`, `webui` (import only).
+  added by hand. Built sections: `network`, `leds`, `audio`, `mqtt`, `time`, `webui` (import only).
 * **Logs** are viewable in the web UI (`logbuf`): errors and warnings always, info messages as
   well in the debug mode (stored).
 
@@ -290,9 +290,9 @@ fits every wiring of a board (not built: `main` uses the board's pins as they ar
 
 | Component | Responsibility |
 | --- | --- |
-| `platform` | boot log, both NVS partitions, LittleFS at `/fs`, the settings class, the device name (`pixeled-` and the last two MAC bytes), SNTP and the time zone (`time_sync.cpp`, the IANA zone table in `timezone.cpp`, built by `tools/build_timezones.py`) |
+| `platform` | boot log, both NVS partitions, LittleFS at `/fs`, the settings class, the device name (`pixeled-` and the last two MAC bytes), SNTP with its two servers and the time zone (`time_sync.cpp`, the IANA zone table in `timezone.cpp`, built by `tools/build_timezones.py`) |
 | `network` | the station and hotspot state machine of sections 9.1 and 9.2, up to 5 stored networks, the hotspot password, scan results, stored in the settings NVS. One task owns the driver and the state; commands are queued, readers get copies (`status()`). Files: `network.cpp` (the state, the task, start), `station.cpp` (scan, connect, retry, roam), `commands.cpp` (the saved networks), `api.cpp` (the calls of other tasks). mDNS: the device answers as `<device name>.local` and announces `_http._tcp`, in both apps |
-| `webserver` | captive portal DNS and redirect, the status API and the built-in page, the setup pages, login, Wi-Fi, hotspot, update, files, log and backup API. Serves the web files from LittleFS, with a recovery page compiled in that works without the file system ([ui/web/web-recovery.md](ui/web/web-recovery.md)). `Config::add_routes` lets `main` register more routes (the LED, audio and MQTT API). Routes are made with `detail::route()` (the main firmware has WebSocket support, `CONFIG_HTTPD_WS_SUPPORT`, which adds fields to `httpd_uri_t`) |
+| `webserver` | captive portal DNS and redirect, the status API and the built-in page, the setup pages, login, Wi-Fi, hotspot, update, files, log and backup API, the time API (`register_time_routes`, registered by `main` only). Serves the web files from LittleFS, with a recovery page compiled in that works without the file system ([ui/web/web-recovery.md](ui/web/web-recovery.md)). `Config::add_routes` lets `main` register more routes (the LED, audio, MQTT and time API). Routes are made with `detail::route()` (the main firmware has WebSocket support, `CONFIG_HTTPD_WS_SUPPORT`, which adds fields to `httpd_uri_t`) |
 | `ota` | firmware and file system images from an upload, a tool or a URL download, app rollback ([ui/web/web-app.md](ui/web/web-app.md) section 5), restart into the recovery app and back, partition layout of section 9.5 |
 | `devconsole` | serial command line for development (`CONFIG_PX_DEV_CONSOLE`): Wi-Fi networks, hotspot, file system, memory, log level, light sensor, relay, motion sensor, audio, LEDs, restart, factory reset, a crash on purpose (`crash yes`) (`help` lists them) |
 | `logbuf` | the log in a ring buffer for the web UI's log page |

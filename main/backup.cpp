@@ -15,6 +15,8 @@
 #include "px/leds/leds.hpp"
 #include "px/hass/hass.hpp"
 #include "px/network/network.hpp"
+#include "px/platform/time_sync.hpp"
+#include "px/platform/timezone.hpp"
 #include "px/webserver/webserver.hpp"
 
 namespace {
@@ -602,6 +604,56 @@ void read_mqtt(const Node &value, bool apply, backup::Report &report)
     }
 }
 
+// ------------------------------------------------------------------------------------- time
+
+constexpr std::string_view kServerKeys[px::platform::kTimeServers] = {"server_1", "server_2"};
+
+// The clock (docs/ui/web/web-app.md section 4): the time zone and the SNTP servers, empty for
+// none (both empty: the defaults)
+void write_time(backup::Writer &out)
+{
+    char zone[px::platform::kMaxZoneLength] = {};
+    px::platform::time_zone(zone, sizeof(zone));
+    const px::platform::TimeServers servers = px::platform::time_servers();
+    out.section("time");
+    out.text("zone", zone);
+    for (size_t i = 0; i < px::platform::kTimeServers; ++i) {
+        out.text(kServerKeys[i], servers.names[i]);
+    }
+}
+
+void read_time(const Node &value, bool apply, backup::Report &report)
+{
+    const size_t problems = report.problems.size();
+    char current[px::platform::kMaxZoneLength] = {};
+    px::platform::time_zone(current, sizeof(current));
+    px::platform::TimeServers servers = px::platform::time_servers();
+    backup::Fields fields(value, "time", report);
+    String zone(current);
+    if (fields.text("zone", px::platform::kMaxZoneLength - 1, zone) && !zone.empty() &&
+        px::platform::time_zone_rule(zone.c_str()) == nullptr) {
+        fields.problem("zone", "not a time zone this firmware knows");
+    }
+    for (size_t i = 0; i < px::platform::kTimeServers; ++i) {
+        String name(servers.names[i]);
+        if (fields.text(kServerKeys[i], px::platform::kTimeServerSize - 1, name)) {
+            std::snprintf(servers.names[i], sizeof(servers.names[i]), "%s", name.c_str());
+        }
+    }
+    fields.finish();
+    char error[96] = {};
+    if (report.problems.size() == problems && !px::platform::check_time_servers(servers, error, sizeof(error))) {
+        report.problem("time", error);
+    }
+    if (report.problems.size() != problems || !apply) {
+        return;
+    }
+    px::platform::set_time_zone(zone.c_str());
+    if (!px::platform::set_time_servers(servers, error, sizeof(error))) {
+        report.problem("time", error);
+    }
+}
+
 // ------------------------------------------------------------------------------------ table
 
 // in this order: a section may depend on one before it
@@ -610,6 +662,7 @@ const backup::Section kSections[] = {
     {"leds", write_leds, read_leds},
     {"audio", write_audio, read_audio},
     {"mqtt", write_mqtt, read_mqtt},
+    {"time", write_time, read_time},
     {"webui", write_webui, read_webui},
 };
 

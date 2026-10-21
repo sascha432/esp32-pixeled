@@ -11,6 +11,11 @@ and what is gone under Removed. Updated in the same commit as the change ([CLAUD
 
 Added
 
+* Web UI page "Time": the clock (local time, time zone, last answer of a server), the time zone
+  from the firmware's IANA list ("This browser's" picks the browser's) and two SNTP servers (empty:
+  pool.ntp.org and time.cloudflare.com). `GET/POST /api/time`, `GET /api/time/zones`, backup
+  section `time`. New servers take effect at once, without a restart.
+
 * I2S microphone (INMP441) on the ESP32's I2S1, from the board's pins `mic_sck_gpio`,
   `mic_ws_gpio`, `mic_sd_gpio`: 32 log bands from 50 Hz to 10 kHz, loudness and beat, with an
   automatic gain and silence detection. It finds the slot the microphone sends in by itself.

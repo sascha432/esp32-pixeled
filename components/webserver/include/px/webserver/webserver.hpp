@@ -61,4 +61,8 @@ esp_err_t reset_login();
 // included. false with `error` filled when they are not usable or cannot be stored.
 bool import_login(const char *username, const char *password, bool apply, char *error, size_t error_size);
 
+// The time zone and the SNTP servers (/api/time, docs/ui/web/web-app.md section 4), for
+// Config::add_routes of the main firmware. The server is an httpd_handle_t.
+void register_time_routes(void *server);
+
 } // namespace px::webserver

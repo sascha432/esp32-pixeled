@@ -159,6 +159,7 @@ extern "C" void app_main()
                                                   out = px::audio::status().audio;
                                               } : nullptr);
                                           px::hass::register_routes(server);
+                                          px::webserver::register_time_routes(server);
                                           if (px::audio::running()) {
                                               px::audio::register_routes(server);
                                           }
