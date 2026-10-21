@@ -17,3 +17,7 @@ CONFIG_RMT_TX_ISR_CACHE_SAFE=y
 
 # The live preview of the LEDs page (components/leds_api, /api/leds/live) is a WebSocket
 CONFIG_HTTPD_WS_SUPPORT=y
+# ESP-IDF 6.1 answers the handshake without calling the route's handler: the login check and the
+# watcher's registration run in these callbacks
+CONFIG_HTTPD_WS_PRE_HANDSHAKE_CB_SUPPORT=y
+CONFIG_HTTPD_WS_POST_HANDSHAKE_CB_SUPPORT=y

@@ -127,7 +127,12 @@ hand it a frame, get a callback when it is out. Behind it one backend per chip:
 * **Overlay** (built 2026-10-21): text or the clock drawn over the canvas after the crossfade
   (section 10).
 * **Live preview** (built 2026-10-21): while someone asks (`leds::preview`, the web page's
-  WebSocket), the task copies the canvas after the overlay, before the brightness.
+  WebSocket), the task copies the canvas after the overlay, before the brightness. The socket
+  (`components/leds_api`) sends 20 messages a second: the canvas in every second one (every fourth
+  for more than 4096 pixels), with an audio input the sound at the end of each (flags, loudness,
+  the 32 bands; main hands `leds_api::register_routes` a getter on `audio::status`). ESP-IDF 6.1
+  answers the handshake without calling the route's handler: the login is checked in the
+  pre-handshake callback and the viewer taken in the post-handshake one.
 * **Memory**: 8192 pixels x 3 bytes = 24 KB per canvas; a second canvas for the crossfade
   between animations. On the ESP32 without PSRAM: the canvas sizes and the DMA ring decide the
   maximum LED count (to measure).
@@ -293,11 +298,18 @@ only on a device with an audio source. Built 2026-10-21:
   (`effects::memory_size`: a small header and a byte per pixel), cleared when the animation, its
   rotation or the canvas changes. Fire keeps its heat there, the reactive animations their phase,
   their smoothed level and the beat's flash.
-* **What an animation hears:** the loudness smoothed (up within 20 ms, down within 250 ms) or the
-  flash of the last beat (fading in 300 ms), whichever is more. In silence or without a source an
-  animation with the switch on runs as without it.
-* Rainbow and plasma: faster (up to 5 times) and brighter with the sound; a beat moves the colors
-  on. Breathe: the brightness follows the sound instead of the breathing. Fire: each column
+* **What an animation hears:** the loudness smoothed with the attack and release (20 and 250 ms
+  as built); in silence it falls with the release instead of starting again from 0. The
+  brightness comes from it (never below a quarter) while there is sound and is full in silence,
+  gliding between the two (100 ms in, 1 s out), so sound at the silence level does not make the
+  LEDs flicker. Breathe adds the flash of a beat (fading in 300 ms); the others move their colors
+  on a beat and glide there in 250 ms instead of jumping. Without a source an animation with the
+  switch on runs as without it.
+* Rainbow and plasma: faster and brighter with the sound; a beat moves the colors on (by the
+  strength). The speed follows only the smoothed loudness, not the beat's flash, so attack
+  and release decide how it changes; the strength sets how much: at most 1.5 times as fast at
+  128, twice at 255 (also gradient, noise, meteor). Until 2026-10-21 it was up to 5 times, and
+  with the automatic gain the loudness is high through most music: the animations raced. Breathe: the brightness follows the sound instead of the breathing. Fire: each column
   sparks with its band (bass left, treble right), loud means taller flames, a beat sparks every
   column. The brightness of a reactive animation never goes below about a tenth.
 * **Strength** per animation (0 to 255, default 128 as above): the level an animation hears and

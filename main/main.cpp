@@ -152,7 +152,12 @@ extern "C" void app_main()
                                   .backup = &backup_access(),
                                   .add_routes =
                                       [](void *server) {
-                                          px::leds_api::register_routes(server);
+                                          // status(), not frame(): the beat a frame takes is the
+                                          // render task's
+                                          px::leds_api::register_routes(
+                                              server, px::audio::running() ? +[](px::effects::Audio &out) {
+                                                  out = px::audio::status().audio;
+                                              } : nullptr);
                                           px::hass::register_routes(server);
                                           if (px::audio::running()) {
                                               px::audio::register_routes(server);

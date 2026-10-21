@@ -26,7 +26,13 @@ Added
 * Animations keep memory between frames (the render task gives it); host tests for the rotation,
   fire and the reactions.
 * "Strength" per animation for the sound (0 to 255, 128 as before): a slider under "Reacts to
-  sound", Home Assistant number "Sound strength", console `leds strength`, backup.
+  sound", Home Assistant number "Sound strength", console `leds strength`, backup. Faster with
+  the sound means at most 1.5 times the speed at strength 128 and twice at 255 (rainbow, plasma,
+  gradient, noise, meteor; it was up to 5 times, so they raced with the music), from the smoothed
+  loudness alone, so attack and release change it. Sound and silence glide into each other
+  (100 ms in, 1 s out; noise at the silence level made the LEDs flicker between full and almost
+  dark), a reactive animation is never darker than a quarter, a beat's new colors are reached in
+  250 ms instead of a jump, and only breathe flashes on a beat.
 * Microphone settings: gain, automatic gain on or off, silence level, range and beat threshold.
   LEDs page card "Microphone" with the 32 bands and the levels live, `GET/POST /api/audio`,
   console `audio set ...`, backup section `audio`.
@@ -46,7 +52,11 @@ Added
 * Text and clock overlay over every animation: card "Overlay", `POST /api/leds/overlay`, Home
   Assistant select "Overlay" and text "Overlay text", console `leds overlay`, backup
   `leds.overlay`; host tests of the font.
-* Live preview on the LEDs page over a WebSocket (`GET /api/leds/live`).
+* Live preview on the LEDs page over a WebSocket (`GET /api/leds/live`); the same socket brings
+  the sound, so the 32 bars of the card "Sound input" move 20 times a second (the other values
+  every 2 s). Under ESP-IDF 6.1 the socket is set up in the handshake callbacks
+  (`CONFIG_HTTPD_WS_PRE/POST_HANDSHAKE_CB_SUPPORT`): IDF 6.1 no longer calls the route's handler
+  for the handshake, and the first build of the preview stayed empty.
 * At power on: as before (default), off or on (`power_on`; LEDs page, Home Assistant select,
   console `leds poweron`, backup). "As before" keeps "switched off by motion" over a restart.
 * The LED supply goes off in the panic handler, before the crash is printed.

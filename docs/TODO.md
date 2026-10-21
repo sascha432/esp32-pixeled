@@ -8,7 +8,8 @@ and the crossfade; phase 8 the live preview and the overlay ([leds.md](leds.md) 
 **For the user's eyes (built 2026-10-21, not looked at on the LEDs):** the seven new animations
 (gradient, color fade, twinkle, meteor, ripple, matrix rain, noise) with and without sound, the
 crossfade, the overlay text and clock (3 x 5 digits on the 24 wide matrix), the live preview on
-the LEDs page, attack and release, the I2S ring's picture (its timing is measured), the supply
+the LEDs page (fixed for ESP-IDF 6.1's handshake, with the sound bars at 20 fps; tried on the test
+matrix 2026-10-21), attack and release, the I2S ring's picture (its timing is measured), the supply
 pin in the panic handler (`crash yes` with the LEDs on, below 10 W).
 
 **2026-10-21, a mistake:** `leds fill 255 255 255` with `leds bench` sent full white to the test

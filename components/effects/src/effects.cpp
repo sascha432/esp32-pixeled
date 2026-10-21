@@ -46,9 +46,14 @@ struct Memory {
     // fire, twinkle, matrix, ripple: milliseconds toward the next step
     uint32_t carry;
     uint32_t random;
-    // the sound, smoothed, and the flash of the last beat (both 0..255 x 256)
+    // the sound, smoothed, the flash of the last beat and how much sound there is (fading in and
+    // out, so silence and sound do not snap; all 0..255 x 256)
     uint32_t level;
     uint32_t pulse;
+    uint32_t presence;
+    // the hue the beats moved the colors on (x 256): where it glides to and where it is
+    uint32_t hue_target;
+    uint32_t hue;
     // the bands, smoothed with the attack and release (0..255 x 256)
     uint16_t bands[kBands];
     // color fade: the hue the beats added; meteor: the head's way in 1/256 pixel
@@ -126,32 +131,60 @@ uint8_t scaled(uint32_t value, uint8_t strength)
     return static_cast<uint8_t>(v > 255 ? 255 : v);
 }
 
+// the brightness of a reactive animation from the sound's level: never darker than a quarter
+uint8_t value_of(uint8_t level)
+{
+    return static_cast<uint8_t>(64 + level * 191u / 255u);
+}
+
 // What a reactive animation hears (docs/leds.md section 6.2): `on` while there is sound; `level`
 // the loudness smoothed (up within the attack, 20 ms by default, down within the release, a
-// quarter second) or a beat's flash, whichever is more; `beat` this frame. In silence (or without
-// a source) an animation runs as it does without audio.
+// quarter second) times the strength; `beat` this frame (the beat's flash, `Memory::pulse`, is
+// breathe's); `drive` the smoothed loudness alone, for the speed; `value` the brightness: from the
+// level with sound, full in silence, gliding between the two (in 100 ms, out in 1 s). Without a
+// source an animation runs as it does without audio.
 struct Sound {
     bool on;
     uint8_t level;
     bool beat;
+    uint8_t drive;
+    uint8_t value;
 };
 
 Sound listen(Memory &m, const Params &params, uint32_t dt)
 {
     const Audio *audio = params.audio;
+    const bool on = audio != nullptr && audio->active;
     // the beat's flash fades in 300 ms
     const uint32_t fade = dt * 255u * 256u / 300u;
     m.pulse = m.pulse > fade ? m.pulse - fade : 0;
-    if (audio == nullptr || !audio->active) {
-        m.level = 0;
-        return {false, 0, false};
-    }
-    if (audio->beat) {
+    if (on && audio->beat) {
         m.pulse = 255u * 256u;
     }
-    follow(m.level, audio->loudness * 256u, dt, params.attack_ms, params.release_ms);
-    const uint32_t level = m.level > m.pulse ? m.level : m.pulse;
-    return {true, scaled(level >> 8, params.strength), audio->beat};
+    // in silence the level falls with the release, so a short pause does not start it from 0
+    follow(m.level, on ? audio->loudness * 256u : 0u, dt, params.attack_ms, params.release_ms);
+    follow(m.presence, on ? 255u * 256u : 0u, dt, 100, 1000);
+    const uint8_t heard = scaled(m.level >> 8, params.strength);
+    const uint32_t presence = m.presence >> 8;
+    const auto value = static_cast<uint8_t>(255u - presence * (255u - value_of(heard)) / 255u);
+    return {on, heard, on && audio->beat, static_cast<uint8_t>(m.level >> 8), value};
+}
+
+// The speed with the sound in 1/64 of the speed without it: the smoothed loudness (without the
+// beat's flash, so attack and release decide how it changes, and falling with the release in
+// silence) times the strength; at most 1.5 times as fast at strength 128, twice at 255
+uint32_t faster(const Sound &sound, uint8_t strength)
+{
+    return 64u + sound.drive * strength / 1020u;
+}
+
+// The hue the beats moved the colors on: `step` per beat, glided to in 250 ms, no jump
+uint8_t beat_hue(Memory &m, const Sound &sound, uint32_t dt, uint32_t step)
+{
+    m.hue_target += sound.beat ? step << 8 : 0u;
+    const uint32_t gap = m.hue_target - m.hue;
+    m.hue += dt >= 250 ? gap : gap * dt / 250u;
+    return static_cast<uint8_t>(m.hue >> 8);
 }
 
 // The bands an animation hears: smoothed with the attack and release in the memory, times the
@@ -170,21 +203,21 @@ void hear_bands(Memory *m, const Params &params, uint32_t dt, uint8_t (&out)[kBa
     }
 }
 
-// The phase of an animation that runs faster with the sound (up to 5 times, as rainbow and
-// plasma): from the clock without memory or audio, else kept in the memory. `sound` is what it
-// hears, off without audio.
-uint32_t reactive_phase(Canvas &canvas, const Params &params, uint32_t ms, Sound &sound)
+// The phase of an animation that runs faster with the sound (`faster`, as rainbow and plasma): from the clock without memory or audio, else kept in the memory. `sound` is what it
+// hears, off without audio; `dt` the milliseconds since the last frame (0 without memory).
+uint32_t reactive_phase(Canvas &canvas, const Params &params, uint32_t ms, Sound &sound, uint32_t &dt)
 {
-    sound = {false, 0, false};
+    sound = {false, 0, false, 0, 255};
+    dt = 0;
     Memory *m = params.audio != nullptr ? memory_of(canvas) : nullptr;
     if (m == nullptr) {
         return phase(ms, params.speed);
     }
     const bool first = !m->started;
-    const uint32_t dt = elapsed(*m, ms);
+    dt = elapsed(*m, ms);
     m->phase = first ? phase(ms, params.speed) : m->phase;
     sound = listen(*m, params, dt);
-    m->phase += dt * per_ms(params.speed) * (sound.on ? 64u + sound.level : 64u) / 64u;
+    m->phase += dt * per_ms(params.speed) * faster(sound, params.strength) / 64u;
     return m->phase;
 }
 
@@ -197,12 +230,6 @@ Rgb scale(Rgb c, uint32_t value)
 void clear(Canvas &canvas)
 {
     std::memset(canvas.pixels, 0, static_cast<size_t>(canvas.width) * canvas.height * sizeof(Rgb));
-}
-
-// the brightness of a reactive animation from the sound's level: never quite dark
-uint8_t value_of(uint8_t level)
-{
-    return static_cast<uint8_t>(24 + level * 231u / 255u);
 }
 
 // ------------------------------------------------------------------------------ animations
@@ -228,14 +255,9 @@ void rainbow(Canvas &canvas, const Params &params, uint32_t ms)
         // the colors go on from where they were without the sound
         m->phase = first ? phase(ms, params.speed) : m->phase;
         const Sound sound = listen(*m, params, dt);
-        if (sound.on) {
-            m->phase += dt * per_ms(params.speed) * (64u + sound.level) / 64u;
-            m->phase += sound.beat ? 24u << 8 : 0u;
-            value = value_of(sound.level);
-        } else {
-            m->phase += dt * per_ms(params.speed);
-        }
-        shift = static_cast<uint8_t>(m->phase >> 8);
+        m->phase += dt * per_ms(params.speed) * faster(sound, params.strength) / 64u;
+        value = sound.value;
+        shift = static_cast<uint8_t>((m->phase >> 8) + beat_hue(*m, sound, dt, 24u * params.strength / 128u));
     }
     for (uint16_t y = 0; y < canvas.height; y++) {
         for (uint16_t x = 0; x < canvas.width; x++) {
@@ -257,11 +279,9 @@ void plasma(Canvas &canvas, const Params &params, uint32_t ms)
         const uint32_t dt = elapsed(*m, ms);
         m->phase = first ? phase(ms, params.speed) : m->phase;
         const Sound sound = listen(*m, params, dt);
-        m->phase += dt * per_ms(params.speed) * (sound.on ? (64u + sound.level) : 64u) / 64u;
-        if (sound.on) {
-            value = value_of(sound.level);
-            hue_shift = static_cast<uint8_t>(m->pulse >> 10); // up to 63 on a beat, fading
-        }
+        m->phase += dt * per_ms(params.speed) * faster(sound, params.strength) / 64u;
+        value = sound.value;
+        hue_shift = beat_hue(*m, sound, dt, 32u * params.strength / 128u);
         base = m->phase;
     }
     const auto t = static_cast<uint8_t>(base >> 9);
@@ -281,9 +301,11 @@ void breathe(Canvas &canvas, const Params &params, uint32_t ms)
     uint8_t level = sin8(static_cast<uint8_t>(phase(ms, params.speed) >> 9));
     if (Memory *m = params.audio != nullptr ? memory_of(canvas) : nullptr) {
         const Sound sound = listen(*m, params, elapsed(*m, ms));
-        if (sound.on) {
-            level = value_of(sound.level);
-        }
+        // the breathing glides into the sound's brightness and back; a beat flashes
+        const uint8_t flash = scaled(m->pulse >> 8, params.strength);
+        const uint8_t heard = sound.level > flash ? sound.level : flash;
+        const uint32_t presence = m->presence >> 8;
+        level = static_cast<uint8_t>((level * (255u - presence) + value_of(heard) * presence) / 255u);
     }
     const Rgb c{static_cast<uint8_t>(params.color.r * level / 255), static_cast<uint8_t>(params.color.g * level / 255),
                 static_cast<uint8_t>(params.color.b * level / 255)};
@@ -439,10 +461,11 @@ void spectrum(Canvas &canvas, const Params &params, uint32_t ms)
 void gradient(Canvas &canvas, const Params &params, uint32_t ms)
 {
     Sound sound;
-    const auto shift = static_cast<uint8_t>(reactive_phase(canvas, params, ms, sound) >> 8);
+    uint32_t dt = 0;
+    const auto shift = static_cast<uint8_t>(reactive_phase(canvas, params, ms, sound, dt) >> 8);
     const Rgb a = params.color;
     const Rgb b{a.b, a.r, a.g};
-    const uint32_t value = sound.on ? value_of(sound.level) : 255;
+    const uint32_t value = sound.value;
     const uint32_t span = static_cast<uint32_t>(canvas.width) + canvas.height;
     for (uint16_t y = 0; y < canvas.height; y++) {
         for (uint16_t x = 0; x < canvas.width; x++) {
@@ -462,12 +485,12 @@ void gradient(Canvas &canvas, const Params &params, uint32_t ms)
 void color_fade(Canvas &canvas, const Params &params, uint32_t ms)
 {
     Sound sound;
-    uint32_t hue = reactive_phase(canvas, params, ms, sound) >> 12;
-    if (Memory *m = memory_of(canvas)) {
-        m->offset += sound.beat ? 64u : 0u;
-        hue += m->offset;
+    uint32_t dt = 0;
+    uint32_t hue = reactive_phase(canvas, params, ms, sound, dt) >> 12;
+    if (Memory *m = params.audio != nullptr ? memory_of(canvas) : nullptr) {
+        hue += beat_hue(*m, sound, dt, 64u);
     }
-    const Rgb c = hsv(static_cast<uint8_t>(hue), 255, sound.on ? value_of(sound.level) : 255);
+    const Rgb c = hsv(static_cast<uint8_t>(hue), 255, sound.value);
     const size_t n = static_cast<size_t>(canvas.width) * canvas.height;
     for (size_t i = 0; i < n; i++) {
         canvas.pixels[i] = c;
@@ -536,9 +559,9 @@ void meteor(Canvas &canvas, const Params &params, uint32_t ms)
     const uint32_t pixels_per_s = 4u + params.speed * 60u / 255u;
     // the head runs off the end and on for a while, so the tail can fade
     const uint32_t length = (w + w / 2u + 4u) * 256u;
-    m->offset += dt * pixels_per_s * 256u / 1000u * (sound.on ? 64u + sound.level : 64u) / 64u;
+    m->offset += dt * pixels_per_s * 256u / 1000u * faster(sound, params.strength) / 64u;
     m->offset %= length;
-    const uint32_t value = sound.on ? value_of(sound.level) : 255;
+    const uint32_t value = sound.value;
     for (uint16_t y = 0; y < h; y++) {
         uint8_t *row = cells + static_cast<size_t>(y) * w;
         // the tail: each pixel fades by about a third of its light every 100 ms, some skip a frame
@@ -590,7 +613,7 @@ void ripple(Canvas &canvas, const Params &params, uint32_t ms)
             start = false;
         }
     }
-    const uint32_t loud = sound.on ? value_of(sound.level) : 255;
+    const uint32_t loud = sound.value;
     for (const Ring &r : m->rings) {
         if (!r.on) {
             continue;
@@ -685,8 +708,9 @@ void matrix(Canvas &canvas, const Params &params, uint32_t ms)
 void noise(Canvas &canvas, const Params &params, uint32_t ms)
 {
     Sound sound;
-    const uint32_t t = reactive_phase(canvas, params, ms, sound);
-    const uint8_t value = sound.on ? value_of(sound.level) : 255;
+    uint32_t dt = 0;
+    const uint32_t t = reactive_phase(canvas, params, ms, sound, dt);
+    const uint8_t value = sound.value;
     // a lattice cell of 8 pixels (1/256 each); at speed 128 the noise drifts up about 4 pixels and
     // changes half a cell in depth a second, the colors go around in 16 s
     const uint32_t z = t >> 10;

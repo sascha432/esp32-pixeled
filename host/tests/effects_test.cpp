@@ -219,6 +219,36 @@ TEST(effects_reactive_follows_the_sound)
     }
 }
 
+TEST(effects_reactive_does_not_flicker_at_the_silence_level)
+{
+    // noise at the silence level: sound and silence every other block, a beat now and then; the
+    // brightness glides, no frame jumps far from the one before
+    Audio noise;
+    noise.loudness = 40;
+    for (const char *slug : {"rainbow", "plasma", "gradient", "noise"}) {
+        Owned o(8, 8);
+        Params params;
+        params.speed = 100;
+        params.color = {200, 200, 200};
+        params.reactive = true;
+        params.audio = &noise;
+        uint32_t before = 0, largest = 0;
+        for (uint32_t ms = 0; ms <= 3000; ms += 10) {
+            noise.active = ms / 20 % 2 == 0;
+            noise.beat = noise.active && ms % 300 == 0;
+            render(find(slug), o.canvas, params, ms);
+            const uint32_t sum = brightness_sum(o.canvas);
+            if (ms > 0) {
+                const uint32_t step = sum > before ? sum - before : before - sum;
+                largest = step > largest ? step : largest;
+            }
+            before = sum;
+        }
+        // 8 x 8 x 3 channels: at most about a tenth of full per frame
+        CHECK(largest < 64u * 3u * 255u / 10u);
+    }
+}
+
 TEST(effects_reactive_fire_sparks_with_its_bands)
 {
     // the bass loud, the treble silent: the left half burns, the right stays dark
@@ -448,7 +478,8 @@ TEST(effects_attack_and_release)
         sums[i] = brightness_sum(o.canvas);
     }
     CHECK(sums[1] > sums[0] * 3);
-    // the attack: 100 ms into the sound a slow attack is still dark
+    // the attack: 300 ms into the sound (the breathing has faded out) a slow attack is still dim;
+    // a reactive animation is never darker than a quarter, so at most 4 times apart
     uint32_t rise[2] = {};
     const uint16_t attacks[2] = {0, 2000};
     for (size_t i = 0; i < 2; i++) {
@@ -458,12 +489,12 @@ TEST(effects_attack_and_release)
         params.reactive = true;
         params.attack_ms = attacks[i];
         params.audio = &loud;
-        for (uint32_t ms = 0; ms <= 100; ms += 10) {
+        for (uint32_t ms = 0; ms <= 300; ms += 10) {
             render(find("breathe"), o.canvas, params, ms);
         }
         rise[i] = brightness_sum(o.canvas);
     }
-    CHECK(rise[0] > rise[1] * 3);
+    CHECK(rise[0] > rise[1] * 2);
 }
 
 TEST(effects_spectrum_bars_fall_with_the_release)

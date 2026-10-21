@@ -34,7 +34,7 @@ Built:
 * Text and clock overlay over every animation (5 x 7 font with umlauts, scrolling).
 * At power on: as before, off or on.
 * Web: LEDs page (live preview, on, brightness, animation, color, speed, rotation, sound
-  settings, overlay, status, sound input, power and timing) and Layout.
+  settings, overlay, status, sound input with the bands live, power and timing) and Layout.
 * MQTT with Home Assistant discovery: light with the animations as effects, speed, rotation,
   reacts to sound, sound strength, attack and release, overlay and its text, power on, power,
   motion, motion auto off, restart.

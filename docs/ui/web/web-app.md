@@ -130,7 +130,8 @@ the estimated power with "limited" when the limit dims the frames, and the LEDs 
 Refreshed every 2 s. The card "Sound input": 32 bars of the bands (bass on the left, grey in
 silence), where the sound comes from (microphone, WARLS, WLED audio sync, nothing), the input
 (sound with a "beat" badge, or silence), the loudest band and the reference (microphone) or the
-packets (UDP) and the loudness, refreshed every 500 ms; a form with Save for the UDP inputs:
+packets (UDP) and the loudness; the bars, the input and the loudness come with the live socket
+(20 times a second), the rest every 2 s (also the bars when the page gets no socket); a form with Save for the UDP inputs:
 WARLS (a switch and its port) and WLED audio sync (a switch); with a microphone a second form:
 gain (dB), automatic gain, silence below (dB), range (dB), beat threshold (times the bass), with
 a hint how they work together. With a motion sensor the card "Motion": "Off when nobody moves" (a switch),
@@ -158,8 +159,10 @@ and `hears`, `motion` with `sensor`, `detected`, `auto_off`, `minutes`, `off_in_
 `settle_ms`, `crossfade_ms`, `power_on` (`restore`, `off`, `on`), `driver` (`rmt`, `parallel`),
 `dither` (`1`, `0`)), `POST /api/leds/overlay` (any of `mode` (`off`, `text`, `clock`), `text`,
 `color`, `speed`, `clock_24h`; answers like `GET /api/leds`), `GET /api/leds/live` (a WebSocket,
-login checked after the handshake: binary messages of 4 bytes width and height, 16 bits little
-endian each, then RGB row by row; 10 a second, 5 for a canvas over 4096 pixels).
+login checked before the handshake: binary messages of 4 bytes width and height, 16 bits little
+endian each, then RGB row by row; the canvas 10 a second, 5 for one over 4096 pixels; with an
+audio input 20 messages a second, those between with 0 x 0, and every one ends with 34 bytes of
+sound: flags (1 active, 2 beat), loudness, the 32 bands).
 `GET /api/audio` (`running` and `microphone`, `source` (`""`, `microphone`, `warls`, `wled`),
 `packets`, the analysis, `settings`, `inputs` with `warls`, `warls_port`, `wled_sync`),
 `POST /api/audio` (the settings, `warls`, `warls_port`, `wled_sync`). The recovery app has none of them (404); its LED pages say so.

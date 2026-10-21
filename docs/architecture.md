@@ -108,7 +108,7 @@ outputs, `mqtt` and `audio` ([leds.md](leds.md), [TODO.md](TODO.md)).
 | `effects` | nothing | yes | The animations: canvas, parameters, time, the memory between frames, the rotation, the audio for the reactive ones ([leds.md](leds.md) section 6) |
 | `leds` | `effects`, `layout`, `output`, `platform` | `frame.cpp` | The render task: state, fade, gamma, power limit, the supply, NVS ([leds.md](leds.md) section 3) |
 | `audio` | `effects`, `platform`, `webserver` | `analysis.cpp` | The I2S microphone: its task, the FFT, bands, gain and beat, its settings (NVS) and `/api/audio`; the render task takes the result with each frame ([leds.md](leds.md) section 6.1) |
-| `leds_api` | `leds`, `webserver` | no | `/api/leds`, registered by main through `webserver::Config::add_routes` |
+| `leds_api` | `leds`, `webserver` | no | `/api/leds`, registered by main through `webserver::Config::add_routes`; the live socket gets the sound through a getter from main, not from `audio` |
 | `hass` | `espressif/mqtt`, `cjson`, `leds`, `webserver` | no | Home Assistant over MQTT: connection, discovery, commands, state; `/api/mqtt` ([leds.md](leds.md) section 8) |
 | `relay`, `motion`, `light_sensor` | GPIO, I2C, ADC drivers | no | Optional hardware (section 9.6) |
 | `logbuf`, `devconsole` | `log`, `console` | no | The web UI's log, the serial console |

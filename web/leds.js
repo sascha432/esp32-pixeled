@@ -22,7 +22,9 @@ window.pxLeds = (() => {
     const effectOf = (slug) => s.effects.find((e) => e.slug === slug) || {};
     // an animation that needs sound only with a source (the current one stays listed)
     const listed = (e) => e.reactive !== "required" || s.audio.source || e.slug === s.effect;
-    const live = preview();
+    // the sound comes with the live socket; the card is drawn further down
+    let mic = null;
+    const live = preview((frame) => mic?.live(frame));
 
     $("#leds-control").innerHTML = card("Light", `
       <div class="form-check form-switch mb-3">
@@ -191,15 +193,15 @@ window.pxLeds = (() => {
     };
 
     // the sound input: the microphone's settings, the UDP inputs and a live readout
-    const mic = await soundInput();
+    mic = await soundInput();
 
-    // every 500 ms the sound's readout, every 2 s the LED status; the live preview stops with the
-    // page (the refresh runs no more)
+    // every 2 s the LED status and the sound's slower facts (the bands come with the live socket);
+    // the live preview stops with the page (the refresh runs no more)
     let tick = 0;
     refresh(async () => {
       live.alive();
-      if (mic) await mic.update();
       if (tick++ % 4 !== 0) return;
+      if (mic) await mic.update();
       s = await api("/api/leds");
       const box = $("#leds-status");
       if (box) box.innerHTML = statusFacts();
@@ -209,7 +211,8 @@ window.pxLeds = (() => {
   }
 
   // The card "Sound input": the analysis as it runs (32 bars, the levels), the microphone's settings
-  // (with one) and the UDP inputs. Returns { update } for the page's refresh, null without the API.
+  // (with one) and the UDP inputs. Returns { update } for the page's refresh (every 2 s) and
+  // { live } for the frames of the live socket (20 a second), null without the API.
   async function soundInput() {
     let a;
     try {
@@ -220,21 +223,35 @@ window.pxLeds = (() => {
     const c = a.settings;
     const sources = { microphone: "microphone", warls: "WARLS (UDP)", wled: "WLED audio sync" };
     const db = (v) => `${Number(v).toFixed(1)} dB`;
-    const readout = () => `
-      <div class="d-flex align-items-end gap-1 mb-2" style="height:64px" aria-label="the 32 bands, bass on the left">
-        ${a.bands.map((b) => `<div class="flex-fill rounded-top ${a.active ? "bg-primary" : "bg-secondary"}"
-          style="height:${Math.max(2, Math.round(b / 255 * 64))}px"></div>`).join("")}
-      </div>
-      ${facts([
+    // the bars are drawn once and then only change their height
+    const bars = `
+      <div id="mic-bars" class="d-flex align-items-end gap-1 mb-2" style="height:64px" aria-label="the 32 bands, bass on the left">
+        ${a.bands.map(() => '<div class="flex-fill rounded-top bg-secondary" style="height:2px"></div>').join("")}
+      </div>`;
+    const drawBars = () => {
+      const box = $("#mic-bars");
+      if (!box) return;
+      [...box.children].forEach((bar, n) => {
+        bar.style.height = `${Math.max(2, Math.round((a.bands[n] || 0) / 255 * 64))}px`;
+        bar.className = `flex-fill rounded-top ${a.active ? "bg-primary" : "bg-secondary"}`;
+      });
+    };
+    let shown = "";
+    const drawFacts = () => {
+      const html = readout();
+      const box = $("#mic-facts");
+      if (box && html !== shown) box.innerHTML = shown = html;
+    };
+    const readout = () => facts([
         ["From", sources[a.source] || "nothing"],
         ["Input", a.active ? `sound${a.beat ? ' <span class="badge text-bg-warning">beat</span>' : ""}` : "silence"],
         ...(a.source === "microphone" ? [["Loudest band", db(a.loudest_db)], ["Reference", db(a.reference_db)]] : []),
         ...(a.source === "warls" || a.source === "wled" ? [["Packets", a.packets]] : []),
         ["Loudness", `${a.loudness} of 255`],
-      ])}`;
+      ]);
     const i = a.inputs;
     $("#leds-audio").innerHTML = card("Sound input", `
-      <div id="mic-readout">${readout()}</div>
+      <div id="mic-readout">${bars}<div id="mic-facts"></div></div>
       <form id="udp-form" class="mt-3">
         <div class="row g-3">
           <div class="col-sm-6 d-flex align-items-end"><div class="form-check form-switch">
@@ -293,11 +310,22 @@ window.pxLeds = (() => {
         toast("saved", "success");
       });
     };
+    drawBars();
+    drawFacts();
+    // without frames from the socket (more than 4 open) the poll draws the bars as well
+    let heard = 0;
     return {
       update: async () => {
-        a = await api("/api/audio");
-        const box = $("#mic-readout");
-        if (box) box.innerHTML = readout();
+        const live = Date.now() - heard < 1000 ? { active: a.active, beat: a.beat, loudness: a.loudness, bands: a.bands } : null;
+        a = { ...(await api("/api/audio")), ...live };
+        if (!live) drawBars();
+        drawFacts();
+      },
+      live: (frame) => {
+        heard = Date.now();
+        a = { ...a, ...frame };
+        drawBars();
+        drawFacts();
       },
     };
   }
@@ -348,9 +376,10 @@ window.pxLeds = (() => {
     };
   }
 
-  // The card "Live": the canvas as drawn, over a WebSocket (GET /api/leds/live). Shown while the page
-  // is open: alive() comes with every refresh; without it for 3 s (another page) the socket closes.
-  function preview() {
+  // The card "Live": the canvas as drawn, over a WebSocket (GET /api/leds/live), and the sound for
+  // `onAudio`. Shown while the page is open: alive() comes with every refresh; without it for 3 s
+  // (another page) the socket closes.
+  function preview(onAudio) {
     $("#leds-live").innerHTML = card("Live", `
       <div><canvas id="live-canvas" class="border rounded" style="max-width:100%;image-rendering:pixelated"></canvas></div>
       <div id="live-state" class="small text-body-secondary mt-1">connecting ...</div>`);
@@ -359,17 +388,26 @@ window.pxLeds = (() => {
     const open = () => {
       socket = new WebSocket(`${location.protocol === "https:" ? "wss" : "ws"}://${location.host}/api/leds/live`);
       socket.binaryType = "arraybuffer";
-      socket.onmessage = (m) => draw(new Uint8Array(m.data));
+      socket.onmessage = (m) => {
+        const data = new Uint8Array(m.data);
+        const width = data[0] | (data[1] << 8), height = data[2] | (data[3] << 8);
+        const end = 4 + width * height * 3;
+        if (width && height) draw(data, width, height);
+        // the sound after the pixels: flags (1 active, 2 beat), loudness, 32 bands
+        if (data.length >= end + 34) {
+          onAudio({ active: !!(data[end] & 1), beat: !!(data[end] & 2), loudness: data[end + 1],
+            bands: Array.from(data.subarray(end + 2, end + 34)) });
+        }
+      };
       socket.onclose = () => {
         const state = $("#live-state");
         if (state) state.textContent = "no preview (more than 4 open, or the connection closed)";
         socket = null;
       };
     };
-    const draw = (data) => {
+    const draw = (data, width, height) => {
       const canvas = $("#live-canvas");
       if (!canvas) { socket?.close(); return; }
-      const width = data[0] | (data[1] << 8), height = data[2] | (data[3] << 8);
       const cell = Math.max(2, Math.min(16, Math.floor((canvas.parentElement.clientWidth - 2) / Math.max(1, width))));
       if (canvas.width !== width * cell || canvas.height !== height * cell) {
         canvas.width = width * cell;
