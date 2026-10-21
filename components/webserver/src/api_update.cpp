@@ -228,18 +228,14 @@ esp_err_t post_factory_reset(httpd_req_t *req)
 void register_update_routes(httpd_handle_t server)
 {
     const httpd_uri_t routes[] = {
-        {.uri = "/api/update", .method = HTTP_GET, .handler = get_update, .user_ctx = nullptr},
-        {.uri = "/api/update/firmware",
-         .method = HTTP_POST,
-         .handler = post_image,
-         .user_ctx = reinterpret_cast<void *>(static_cast<intptr_t>(ota::Target::Firmware))},
-        {.uri = "/api/update/filesystem",
-         .method = HTTP_POST,
-         .handler = post_image,
-         .user_ctx = reinterpret_cast<void *>(static_cast<intptr_t>(ota::Target::FileSystem))},
-        {.uri = "/api/update/url", .method = HTTP_POST, .handler = post_url, .user_ctx = nullptr},
-        {.uri = "/api/restart", .method = HTTP_POST, .handler = post_restart, .user_ctx = nullptr},
-        {.uri = "/api/factory-reset", .method = HTTP_POST, .handler = post_factory_reset, .user_ctx = nullptr},
+        route("/api/update", HTTP_GET, get_update),
+        route("/api/update/firmware", HTTP_POST, post_image,
+              reinterpret_cast<void *>(static_cast<intptr_t>(ota::Target::Firmware))),
+        route("/api/update/filesystem", HTTP_POST, post_image,
+              reinterpret_cast<void *>(static_cast<intptr_t>(ota::Target::FileSystem))),
+        route("/api/update/url", HTTP_POST, post_url),
+        route("/api/restart", HTTP_POST, post_restart),
+        route("/api/factory-reset", HTTP_POST, post_factory_reset),
     };
     for (const auto &route : routes) {
         httpd_register_uri_handler(server, &route);

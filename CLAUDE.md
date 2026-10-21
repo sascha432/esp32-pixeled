@@ -21,5 +21,8 @@
   first, inside the unreleased version), under Added, Changed, Fixed or Removed, saying what a
   user or developer sees. A change that reverses an entry of the same day replaces it instead of
   adding a second one.
+- **NVS writes follow the policy** in docs/architecture.md section 9.3: values changed by live
+  controls (sliders, Home Assistant numbers) go through `platform::set_blob_later` (10 s delay),
+  explicit saves and secrets are written at once, nothing writes per frame.
 - **No code from kfc_fw.** `../kfc_fw` (the clock and LED matrix plugin) is the reference for
   features and behavior only.

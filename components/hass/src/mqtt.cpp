@@ -4,8 +4,9 @@
 
 #include <cstdio>
 #include <cstdlib>
-#include <initializer_list>
 #include <cstring>
+#include <initializer_list>
+#include <iterator>
 
 #include "cJSON.h"
 #include "esp_check.h"
@@ -53,6 +54,14 @@ struct Sent {
     bool motion = false;
     bool auto_off_valid = false;
     leds::AutoOff auto_off;
+    bool style_valid = false;
+    leds::Style style;
+    bool audio_valid = false;
+    bool audio = false;
+    bool overlay_valid = false;
+    leds::Overlay overlay;
+    bool power_on_valid = false;
+    leds::PowerOn power_on = leds::PowerOn::Restore;
 };
 Sent g_sent;
 bool g_motion = false;
@@ -86,6 +95,14 @@ void publish(const char *topic_name, const char *payload, bool retain)
 }
 
 // ------------------------------------------------------------------------------- discovery
+
+constexpr const char *kPowerOn[] = {"restore", "off", "on"};
+constexpr const char *kOverlayModes[] = {"off", "text", "clock"};
+
+bool has_audio()
+{
+    return g_device.has_audio != nullptr && g_device.has_audio();
+}
 
 // the common part of every config: names, ids, availability, the device
 void begin_config(formats::JsonWriter &json, const char *object, const char *name)
@@ -124,10 +141,70 @@ void announce(const char *component, const char *object, formats::JsonWriter &js
     publish(config_topic, json.c_str(), true);
 }
 
+// an entity that is not there (any more): its config emptied, Home Assistant removes it
+void forget(const char *component, const char *object)
+{
+    char config_topic[kTopicSize * 3];
+    std::snprintf(config_topic, sizeof(config_topic), "%s/%s/%s/%s/config", g_settings.prefix, component, g_node,
+                  object);
+    publish(config_topic, "", true);
+}
+
+// a number entity on <object>/set and <object>/state
+void announce_number(char *buffer, size_t size, const char *object, const char *name, int min, int max,
+                     const char *unit, const char *icon, bool config)
+{
+    char command[kTopicSize * 2], state[kTopicSize * 2], suffix[40];
+    std::snprintf(suffix, sizeof(suffix), "%s/set", object);
+    topic(command, suffix);
+    std::snprintf(suffix, sizeof(suffix), "%s/state", object);
+    topic(state, suffix);
+    formats::JsonWriter json(buffer, size);
+    begin_config(json, object, name);
+    json.string("command_topic", command)
+        .string("state_topic", state)
+        .number("min", min)
+        .number("max", max)
+        .string("mode", "slider")
+        .string("icon", icon);
+    if (unit != nullptr) {
+        json.string("unit_of_measurement", unit);
+    }
+    if (config) {
+        json.string("entity_category", "config");
+    }
+    json.end_object();
+    announce("number", object, json);
+}
+
+// a select entity on <object>/set and <object>/state
+void announce_select(char *buffer, size_t size, const char *object, const char *name, const char *const *options,
+                     size_t count, const char *icon, bool config)
+{
+    char command[kTopicSize * 2], state[kTopicSize * 2], suffix[40];
+    std::snprintf(suffix, sizeof(suffix), "%s/set", object);
+    topic(command, suffix);
+    std::snprintf(suffix, sizeof(suffix), "%s/state", object);
+    topic(state, suffix);
+    formats::JsonWriter json(buffer, size);
+    begin_config(json, object, name);
+    json.string("command_topic", command).string("state_topic", state).begin_array("options");
+    for (size_t i = 0; i < count; i++) {
+        json.string(nullptr, options[i]);
+    }
+    json.end_array().string("icon", icon);
+    if (config) {
+        json.string("entity_category", "config");
+    }
+    json.end_object();
+    announce("select", object, json);
+}
+
 void announce_all()
 {
     static char buffer[1536]; // the client's task only
     char command[kTopicSize * 2], state[kTopicSize * 2];
+    const bool audio = has_audio();
 
     {
         formats::JsonWriter json(buffer, sizeof(buffer));
@@ -144,7 +221,10 @@ void announce_all()
             .boolean("effect", true)
             .begin_array("effect_list");
         for (size_t i = 0; i < effects::count(); i++) {
-            json.string(nullptr, effects::info(i)->name);
+            // an animation that needs sound only with a source
+            if (audio || effects::info(i)->reactive != effects::Reactive::Required) {
+                json.string(nullptr, effects::info(i)->name);
+            }
         }
         json.end_array().end_object();
         announce("light", "light", json);
@@ -222,6 +302,75 @@ void announce_all()
         json.string("state_topic", state).string("device_class", "motion").end_object();
         announce("binary_sensor", "motion", json);
     }
+    // the current animation's rotation and sound switch (each animation keeps its own)
+    {
+        formats::JsonWriter json(buffer, sizeof(buffer));
+        begin_config(json, "rotation", "Rotation");
+        topic(command, "rotation/set");
+        topic(state, "rotation/state");
+        json.string("command_topic", command)
+            .string("state_topic", state)
+            .begin_array("options")
+            .string(nullptr, "0")
+            .string(nullptr, "90")
+            .string(nullptr, "180")
+            .string(nullptr, "270")
+            .end_array()
+            .string("icon", "mdi:screen-rotation")
+            .end_object();
+        announce("select", "rotation", json);
+    }
+    if (!audio) {
+        forget("switch", "reactive");
+        forget("number", "strength");
+        forget("number", "attack");
+        forget("number", "release");
+    }
+    if (audio) {
+        formats::JsonWriter json(buffer, sizeof(buffer));
+        begin_config(json, "reactive", "Reacts to sound");
+        topic(command, "reactive/set");
+        topic(state, "reactive/state");
+        json.string("command_topic", command)
+            .string("state_topic", state)
+            .string("icon", "mdi:music-note")
+            .end_object();
+        announce("switch", "reactive", json);
+    }
+    if (audio) {
+        formats::JsonWriter json(buffer, sizeof(buffer));
+        begin_config(json, "strength", "Sound strength");
+        topic(command, "strength/set");
+        topic(state, "strength/state");
+        json.string("command_topic", command)
+            .string("state_topic", state)
+            .number("min", 0)
+            .number("max", 255)
+            .string("mode", "slider")
+            .string("icon", "mdi:music-note-plus")
+            .end_object();
+        announce("number", "strength", json);
+        announce_number(buffer, sizeof(buffer), "attack", "Sound attack", 0, effects::kMaxAttackMs, "ms",
+                        "mdi:arrow-up-bold", false);
+        announce_number(buffer, sizeof(buffer), "release", "Sound release", 0, effects::kMaxReleaseMs, "ms",
+                        "mdi:arrow-down-bold", false);
+    }
+    announce_select(buffer, sizeof(buffer), "overlay", "Overlay", kOverlayModes, std::size(kOverlayModes),
+                    "mdi:format-text", false);
+    {
+        formats::JsonWriter json(buffer, sizeof(buffer));
+        begin_config(json, "overlay_text", "Overlay text");
+        topic(command, "overlay_text/set");
+        topic(state, "overlay_text/state");
+        json.string("command_topic", command)
+            .string("state_topic", state)
+            .number("max", static_cast<int64_t>(leds::kOverlayTextSize - 1))
+            .string("icon", "mdi:message-text")
+            .end_object();
+        announce("text", "overlay_text", json);
+    }
+    announce_select(buffer, sizeof(buffer), "power_on", "Power on", kPowerOn, std::size(kPowerOn), "mdi:power-settings",
+                    true);
     {
         formats::JsonWriter json(buffer, sizeof(buffer));
         begin_config(json, "restart", "Restart");
@@ -295,11 +444,64 @@ void on_timer(void *)
     if (!connected) {
         return;
     }
+    // an audio source came or went (a UDP input): the entities and the effect list again
+    const bool audio = has_audio();
+    if (!g_sent.audio_valid || g_sent.audio != audio) {
+        if (g_sent.audio_valid) {
+            announce_all();
+            g_sent.style_valid = false;
+        }
+        g_sent.audio = audio;
+        g_sent.audio_valid = true;
+    }
     const leds::Status s = leds::status();
     if (!g_sent.valid || !same(g_sent.state, s.state)) {
         publish_light(s.state, !g_sent.valid || g_sent.state.speed != s.state.speed);
         g_sent.state = s.state;
         g_sent.valid = true;
+    }
+    if (!g_sent.style_valid || g_sent.style.rotation != s.style.rotation || g_sent.style.reactive != s.style.reactive ||
+        g_sent.style.strength != s.style.strength || g_sent.style.attack_ms != s.style.attack_ms ||
+        g_sent.style.release_ms != s.style.release_ms) {
+        char state[kTopicSize * 2];
+        char rotation[8];
+        std::snprintf(rotation, sizeof(rotation), "%u", s.style.rotation * 90u);
+        topic(state, "rotation/state");
+        publish(state, rotation, true);
+        if (audio) {
+            topic(state, "reactive/state");
+            publish(state, s.style.reactive ? "ON" : "OFF", true);
+            char number[8];
+            std::snprintf(number, sizeof(number), "%u", s.style.strength);
+            topic(state, "strength/state");
+            publish(state, number, true);
+            std::snprintf(number, sizeof(number), "%u", s.style.attack_ms);
+            topic(state, "attack/state");
+            publish(state, number, true);
+            std::snprintf(number, sizeof(number), "%u", s.style.release_ms);
+            topic(state, "release/state");
+            publish(state, number, true);
+        }
+        g_sent.style = s.style;
+        g_sent.style_valid = true;
+    }
+    const leds::Overlay o = leds::overlay();
+    if (!g_sent.overlay_valid || g_sent.overlay.mode != o.mode || std::strcmp(g_sent.overlay.text, o.text) != 0) {
+        char state[kTopicSize * 2];
+        topic(state, "overlay/state");
+        publish(state, kOverlayModes[static_cast<size_t>(o.mode) % std::size(kOverlayModes)], true);
+        topic(state, "overlay_text/state");
+        publish(state, o.text, true);
+        g_sent.overlay = o;
+        g_sent.overlay_valid = true;
+    }
+    const leds::PowerOn power_on = leds::config().power_on;
+    if (!g_sent.power_on_valid || g_sent.power_on != power_on) {
+        char state[kTopicSize * 2];
+        topic(state, "power_on/state");
+        publish(state, kPowerOn[static_cast<size_t>(power_on) % std::size(kPowerOn)], true);
+        g_sent.power_on = power_on;
+        g_sent.power_on_valid = true;
     }
     const int64_t now = esp_timer_get_time();
     if (now - g_sent.sensors_at >= kSensorUs) {
@@ -403,6 +605,89 @@ void handle_data(const esp_mqtt_event_t &event)
         leds::set_auto_off(a); // clamped there
         return;
     }
+    topic(expected, "rotation/set");
+    if (std::strcmp(name, expected) == 0) {
+        char text[8];
+        std::snprintf(text, sizeof(text), "%.*s", event.data_len, event.data);
+        const int degrees = std::atoi(text);
+        const size_t effect = leds::status().state.effect;
+        leds::Style style = leds::styles().style[effect < leds::kMaxEffects ? effect : 0];
+        if (degrees % 90 == 0 && degrees >= 0 && degrees < 360) {
+            style.rotation = static_cast<uint8_t>(degrees / 90);
+            leds::set_style(effect, style);
+        }
+        return;
+    }
+    topic(expected, "reactive/set");
+    if (std::strcmp(name, expected) == 0) {
+        const size_t effect = leds::status().state.effect;
+        leds::Style style = leds::styles().style[effect < leds::kMaxEffects ? effect : 0];
+        style.reactive = event.data_len == 2 && std::strncmp(event.data, "ON", 2) == 0;
+        leds::set_style(effect, style);
+        return;
+    }
+    topic(expected, "strength/set");
+    if (std::strcmp(name, expected) == 0) {
+        char text[8];
+        std::snprintf(text, sizeof(text), "%.*s", event.data_len, event.data);
+        const int value = std::atoi(text);
+        const size_t effect = leds::status().state.effect;
+        leds::Style style = leds::styles().style[effect < leds::kMaxEffects ? effect : 0];
+        style.strength = static_cast<uint8_t>(value < 0 ? 0 : value > 255 ? 255 : value);
+        leds::set_style(effect, style);
+        return;
+    }
+    topic(expected, "attack/set");
+    const bool attack = std::strcmp(name, expected) == 0;
+    topic(expected, "release/set");
+    if (attack || std::strcmp(name, expected) == 0) {
+        char text[8];
+        std::snprintf(text, sizeof(text), "%.*s", event.data_len, event.data);
+        const int value = std::atoi(text);
+        const size_t effect = leds::status().state.effect;
+        leds::Style style = leds::styles().style[effect < leds::kMaxEffects ? effect : 0];
+        // the largest values are clamped by set_style
+        const auto ms = static_cast<uint16_t>(value < 0 ? 0 : value > 65535 ? 65535 : value);
+        if (attack) {
+            style.attack_ms = ms;
+        } else {
+            style.release_ms = ms;
+        }
+        leds::set_style(effect, style);
+        return;
+    }
+    topic(expected, "overlay/set");
+    if (std::strcmp(name, expected) == 0) {
+        for (size_t i = 0; i < std::size(kOverlayModes); i++) {
+            if (std::strlen(kOverlayModes[i]) == static_cast<size_t>(event.data_len) &&
+                std::strncmp(event.data, kOverlayModes[i], event.data_len) == 0) {
+                leds::Overlay o = leds::overlay();
+                o.mode = static_cast<leds::OverlayMode>(i);
+                leds::set_overlay(o);
+            }
+        }
+        return;
+    }
+    topic(expected, "overlay_text/set");
+    if (std::strcmp(name, expected) == 0) {
+        leds::Overlay o = leds::overlay();
+        std::snprintf(o.text, sizeof(o.text), "%.*s", event.data_len, event.data);
+        leds::set_overlay(o);
+        return;
+    }
+    topic(expected, "power_on/set");
+    if (std::strcmp(name, expected) == 0) {
+        for (size_t i = 0; i < std::size(kPowerOn); i++) {
+            if (std::strlen(kPowerOn[i]) == static_cast<size_t>(event.data_len) &&
+                std::strncmp(event.data, kPowerOn[i], event.data_len) == 0) {
+                leds::Config c = leds::config();
+                c.power_on = static_cast<leds::PowerOn>(i);
+                char error[64];
+                leds::set_config(c, error, sizeof(error));
+            }
+        }
+        return;
+    }
     topic(expected, "restart");
     if (std::strcmp(name, expected) == 0) {
         ESP_LOGI(kTag, "restart from Home Assistant");
@@ -425,7 +710,9 @@ void on_event(void *, esp_event_base_t, int32_t id, void *data)
         topic(name, "availability");
         publish(name, "online", true);
         announce_all();
-        for (const char *suffix : {"light/set", "speed/set", "restart", "auto_off/set", "auto_off_minutes/set"}) {
+        for (const char *suffix :
+             {"light/set", "speed/set", "restart", "auto_off/set", "auto_off_minutes/set", "rotation/set", "reactive/set",
+              "strength/set", "attack/set", "release/set", "overlay/set", "overlay_text/set", "power_on/set"}) {
             topic(name, suffix);
             esp_mqtt_client_subscribe(event.client, name, 1);
         }

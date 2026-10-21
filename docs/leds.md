@@ -64,14 +64,26 @@ hand it a frame, get a callback when it is out. Behind it one backend per chip:
 * **S3**: the frame is encoded into one of two DMA buffers in PSRAM while the other is sent.
 * **ESP32** (built, `components/output/src/i2s_output.cpp`): I2S0 in LCD mode, 16-bit samples,
   bit n on lane n (data lines 8 to 23 of the GPIO matrix), 2.4 MHz from the 160 MHz PLL. The frame
-  is encoded into one buffer in internal DMA memory (144 bytes per LED position, the always-high
-  and always-low slots written once at the start), a chain of descriptors, 800 zero slots as the
-  latch; one interrupt at the end of the frame. The I2S hardware sends the two 16-bit samples of
-  a 32-bit word in reverse order; the encoder swaps them. Measured on the test matrix: 3 lanes of
-  256 LEDs at 120 fps (8.33 ms a frame), no glitches while the web UI is busy. The default driver.
-  Open: 1024 LEDs per lane need 147 KB in one buffer, too much next to Wi-Fi: 8-bit samples for up
-  to 8 lanes (half) and a ring of small buffers encoded from the interrupt of the finished one
-  (TODO). I2S1 stays for the microphone.
+  is encoded while it is sent (built 2026-10-21): a ring of 4 buffers in internal DMA memory, 24
+  LED positions each (144 bytes per position, 3456 bytes and 0.72 ms per buffer, the always-high
+  and always-low slots written once at the start). The DMA reads them in a circle; the interrupt
+  at the end of each buffer (from IRAM, also while the flash is busy) encodes the next positions
+  into it, three buffers ahead of the DMA; after the last positions the chain goes on to 800 zero
+  slots (the latch) and ends. 15 KB for any LED count (one buffer for the frame took 147 KB for
+  1024 per lane). A frame in the PSRAM is copied to internal RAM first. The I2S hardware sends the
+  two 16-bit samples of a 32-bit word in reverse order; the encoder swaps them. Measured on the
+  test matrix: 3 lanes of 256 LEDs 8.35 ms a frame (94 fps with the render task, which aims at
+  100; the encoding no longer adds to the frame: 8.9 ms before), 3 x 1024 31.2 ms (32.0 fps, the
+  theory 31.0), 3 x 2048 61.9 ms (16.2 fps). 8 lanes (2026-10-21, lanes 5 to 8 on free pins of
+  the test board without LEDs): 8 x 256 8.21 ms (122 fps), 8 x 1024 31.3 ms (32.0 fps), 8 x 2048
+  62.1 ms (16.1 fps), the same as 3 lanes: the wire sets the time. The encoder (`leds bench
+  encode`: every bit of every lane set, the slowest data) takes 110 us per buffer for 3 lanes and
+  248 us for 8, for any count, of the 720 us the buffer is sent in; about 28 us per lane, so 16
+  lanes would need about 470 us. Not tried: how the LEDs look with 1024 per lane (the matrix has
+  256). 8-bit samples were planned to halve the
+  memory for up to 8 lanes; they would not: at 8 bits the ESP32's I2S in LCD mode still takes one
+  32-bit FIFO word per two samples (ESP-IDF's own i80 LCD driver for the ESP32 says so), and the
+  ring made the memory small anyway. The default driver. I2S1 stays for the microphone.
 * **RMT**: one channel per lane, the IDF's encoder; the C3 and C6 have 2 TX channels. Without
   DMA (ESP32, C3) an interrupt refills the pulse memory every few pixels; a late refill ends the
   frame early and the LEDs show garbage. Seen on the ESP32 while the web UI polled: the interrupt
@@ -102,10 +114,20 @@ hand it a frame, get a callback when it is out. Behind it one backend per chip:
 * **The supply**: switched on when the LEDs turn on, the first frame after the settle time
   (50 ms); off after the fade-out and one dark frame (built).
 * **Stored** (NVS namespace `leds`): the layout and the config at once, the state (on,
-  brightness, animation, color, speed) 5 s after its last change; restored at boot (built). Each
+  brightness, animation, color, speed) and the animations' styles 10 s after the last change, at
+  most 60 s after the first (the write policy, [architecture.md](architecture.md) section 9.3);
+  restored at boot (built). Each
   blob starts with a version (`kStoredVersion`); a blob of another version is not read and the
   defaults apply. A field added into a struct's padding does not change its size, so the size
   alone could not tell (found 2026-10-19: the new dither field read the old padding).
+* **Crossfade** (built 2026-10-21): another animation fades in over the previous one
+  (`Config::crossfade_ms`, default 1000, 0: at once). The previous one keeps drawing on a second
+  canvas with its own memory (allocated with the first switch; without the memory no crossfade)
+  and is blended in less with every frame. Only while the LEDs are lit.
+* **Overlay** (built 2026-10-21): text or the clock drawn over the canvas after the crossfade
+  (section 10).
+* **Live preview** (built 2026-10-21): while someone asks (`leds::preview`, the web page's
+  WebSocket), the task copies the canvas after the overlay, before the brightness.
 * **Memory**: 8192 pixels x 3 bytes = 24 KB per canvas; a second canvas for the crossfade
   between animations. On the ESP32 without PSRAM: the canvas sizes and the DMA ring decide the
   maximum LED count (to measure).
@@ -188,7 +210,13 @@ A 7-segment clock is a shape with segment groups: the digits are a mask over any
 
 * The supply relay or MOSFET (`board::Info::power_gpio`) is off while the board starts, switched
   on before the first frame with a settle time (a setting), and off after the LEDs faded out.
-* Forced off in the panic handler, and by the recovery app.
+* Forced off in the panic handler (built 2026-10-21: `relay::off_at_crash` for relays 1 and 2;
+  the wrapped `esp_panic_handler` writes the pins' registers before it prints; the console's
+  `crash yes` tries it; the panic and the restart tried on the test matrix with the LEDs off, the
+  pin itself not yet measured), and by the recovery app.
+* **At power on** (`Config::power_on`, built 2026-10-21): as before (default), off, or on. "As
+  before" keeps the mark "switched off by motion" too (NVS key `boot`, written when it changes):
+  the LEDs stay off and come on with the next motion.
 * Three crashes in a row (panic, watchdog; counted in RTC memory, cleared after 30 s of running)
   start the LEDs off with RMT, so a setting that crashes the device cannot restart it forever
   (built).
@@ -208,28 +236,81 @@ All sources fill the same **audio frame**: loudness left and right, 32 bands, be
   signal is used (the L/R pin of the microphone decides it). A task on core 0 analyzes blocks of
   512 samples (23 ms, 43 a second):
   * a Hann window and a 512-point FFT (own radix-2 code, single precision);
-  * 32 bands log-spaced from 50 Hz to 10 kHz, each the loudest bin of its range in dB;
-  * an automatic gain: the reference follows the loudest band up at once and falls 3 dB a
-    second; the 40 dB below it are 0..255, so quiet and loud music both fill the bars;
-  * silence below -62 dB of full scale (a quiet room reads -65 to -75 dB): the bars fall to 0;
+  * 32 bands log-spaced from 50 Hz to 10 kHz, each the loudest bin of its range in dB, plus the
+    gain (setting, -20 to 40 dB, default 0);
+  * an automatic gain (setting, default on): the reference follows the loudest band up at once
+    and falls 3 dB a second; the range below it (setting, 10 to 80 dB, default 40) is 0..255, so
+    quiet and loud music both fill the bars. Off: the reference is full scale (0 dB), the gain
+    decides how full the bars get;
+  * silence below the silence level (setting, -90 to -20 dB, default -62; a quiet room reads
+    -65 to -75 dB, the gain added): the bars fall to 0;
   * the bars rise at once and fall by 12 % of full height per block;
-  * a beat when the bass (bands 0 to 3) is 1.6 times its average, at most one in 140 ms;
+  * a beat when the bass (bands 0 to 3) is the beat threshold (setting, 1.2 to 3.0 times,
+    default 1.6) of its average, at most one in 140 ms;
   * the loudness from the block's RMS on the same scale.
+
+  The settings (`audio::Settings`, NVS namespace `audio`, key `settings`) are set on the LEDs
+  page's card "Microphone" (`GET/POST /api/audio`, with a live view of the bands and levels),
+  with the console `audio set gain|agc|silence|range|beat <value>` and in the backup (section
+  `audio`); the task uses them from the next block.
 
   The render task takes the latest result with each frame; a beat stays until a frame took it.
   The analysis is host tested (`host/tests/audio_test.cpp`). Console `audio [watch [s]]` prints
-  the bands as digits. Not built yet: loudness left and right, the peak, settings (gain range,
-  silence level), the input on the S3 and the C chips.
-* **UDP "WARLS"** spectrum packets, port 21324, the `kfc_fw` format (its `scripts/audio_analyzer`
-  sends them from a PC).
-* **WLED audio sync v2**, multicast port 11988, so a WLED sound-reactive device or LedFx can be
-  the source.
+  the bands as digits. Not built yet: loudness left and right, the peak, the input on the S3 and
+  the C chips.
+* **UDP "WARLS"** spectrum packets (built 2026-10-21), port 21324 (a setting), the `kfc_fw`
+  format (its `scripts/audio_analyzer` sends them from a PC, as does `tools/audio_send.py`): 2 to
+  32 bands spread over the 32, the loudness the louder of left and right, the beat found from the
+  bass like the microphone's; the source holds for the packet's timeout.
+* **WLED audio sync v2** (built 2026-10-21), multicast 239.0.0.1 port 11988, so a WLED
+  sound-reactive device or LedFx can be the source: 16 bands spread over the 32, the loudness
+  from `sampleSmth`, the beat from `samplePeak`; the source holds for 1 s. The group is joined once
+  there is a network and again after 30 s without packets.
+
+  Both are switched on in the card "Sound input" (`POST /api/audio` `warls`, `warls_port`,
+  `wled_sync`), the console (`audio set warls|port|wled ...`) and the backup (section `audio`);
+  NVS key `inputs` in namespace `audio`. Their task (`components/audio/src/udp.cpp`, the packets
+  in `packets.cpp`, host tested) starts after the network (a socket before lwIP is up asserts:
+  found as a boot loop 2026-10-21). While a UDP source holds it is used instead of the
+  microphone. Tried on the test matrix with `tools/audio_send.py`: WARLS to the device and WLED
+  sync over multicast, about 40 packets a second, the bands and the beat arrive.
 
 ### 6.2 Reactive is a switch, not an animation
 
 There are no separate reactive animations. Each animation declares whether it reacts: never,
-optional, or only with audio. An optional one has a "reactive" switch, shown only while an audio
-source is active. Shared settings for all of them: sensitivity, attack, release.
+optional, or only with audio. An optional one has a "reactive" switch ("Reacts to sound"), shown
+only on a device with an audio source. Built 2026-10-21:
+
+* **Per animation:** each animation keeps its own switch and its own rotation (`leds::Style`,
+  NVS key `styles`, indexed like the animations: a new animation goes before the test patterns,
+  whose index may change). The web UI, Home Assistant and the console set them for the current
+  animation; the backup lists the animations that are not at the default.
+* **Rotation:** 0, 90, 180 or 270 degrees clockwise, done by `effects::render` for every
+  animation. A quarter turn draws on a second canvas of height x width (allocated by the render
+  task when first used) and copies it turned; half a turn reverses the pixels in place. So a
+  strip turned by a quarter gets the fire along its length.
+* **Memory between frames:** the render task gives each animation a block
+  (`effects::memory_size`: a small header and a byte per pixel), cleared when the animation, its
+  rotation or the canvas changes. Fire keeps its heat there, the reactive animations their phase,
+  their smoothed level and the beat's flash.
+* **What an animation hears:** the loudness smoothed (up within 20 ms, down within 250 ms) or the
+  flash of the last beat (fading in 300 ms), whichever is more. In silence or without a source an
+  animation with the switch on runs as without it.
+* Rainbow and plasma: faster (up to 5 times) and brighter with the sound; a beat moves the colors
+  on. Breathe: the brightness follows the sound instead of the breathing. Fire: each column
+  sparks with its band (bass left, treble right), loud means taller flames, a beat sparks every
+  column. The brightness of a reactive animation never goes below about a tenth.
+* **Strength** per animation (0 to 255, default 128 as above): the level an animation hears and
+  the bands (fire, matrix rain, spectrum) are multiplied by strength / 128 (at most full); 255
+  reacts twice as much, 0 is the switch off. A slider under the switch on the LEDs page, Home
+  Assistant number "Sound strength", console `leds strength`, backup `strength` in
+  `leds.animations`.
+* **Attack and release** per animation (built 2026-10-21): how fast the level and the bands rise
+  (attack, 0 to 2000 ms, default 20) and fall (release, 0 to 5000 ms, default 250); the bands are
+  smoothed in the animation's memory. Sliders next to the strength (also for Spectrum, whose bars
+  follow them), Home Assistant numbers "Sound attack" and "Sound release", console `leds attack`
+  and `leds release`, backup `attack_ms` and `release_ms`. The stored styles of the version
+  before are kept (NVS key `styles`, version 3, 32 animations).
 
 ### 6.3 The list (a proposal, to be decided)
 
@@ -238,20 +319,22 @@ source is active. Shared settings for all of them: sensitivity, attack, release.
 | Solid | no | |
 | Flash / strobe | no | also the alarm and the reboot warning |
 | Game of life | no | 2D |
-| Gradient | optional: pulse | linear or radial, angle, palette |
+| Gradient | optional: pulse | Built 2026-10-21: from the color to the color a third of the hue circle on, there and back along the diagonal, moving; with sound faster and brighter |
 | Rainbow | optional: speed, brightness | along the strip or at an angle |
-| Color fade | optional: next color on the beat | |
-| Fire | optional: heat, sparks, a band per column | |
+| Color fade | optional: next color on the beat | Built 2026-10-21: one color around the hue circle (8 s at speed 128); with sound brighter, a beat jumps on |
+| Fire | optional: heat, sparks, a band per column | Built 2026-10-21: a heat map, a byte per pixel; each step cools, lets the heat rise and sparks the bottom rows; black, red, yellow, white; the speed sets 15 to 90 steps a second |
 | Plasma | optional: speed, hue, zoom, bands | |
-| Noise / lava | optional | Perlin noise with a palette |
-| Twinkle / stars | optional: sparks on the beat | |
+| Noise / lava | optional | Built 2026-10-21 as "Noise": smooth value noise (8 pixel cells) drifting through the hues; with sound faster and brighter |
+| Twinkle / stars | optional: sparks on the beat | Built 2026-10-21 as "Twinkle": stars in the color rise and fade (3 to 0.4 s), about one LED in seven; more with the sound, a burst on the beat |
 | Fairy lights | optional: sparkle | the `kfc_fw` Xmas animation |
-| Meteor / scanner | optional | 1D |
-| Ripple | optional: a ring on the beat | 2D |
-| Matrix rain | optional | 2D |
+| Meteor / scanner | optional | Built 2026-10-21 as "Meteor": one per row, left to right, a tail fading unevenly, 4 to 64 pixels a second; with sound faster and brighter |
+| Ripple | optional: a ring on the beat | Built 2026-10-21: rings in rainbow colors from random places, fading as they grow (a new one every 3 to 0.4 s); with sound a ring on every beat |
+| Matrix rain | optional | Built 2026-10-21: drops in the color with a light head and a tail of half the height; with sound each column drops with its band, all on a beat |
 | Spectrum bars | only with audio | color: rainbow, gradient or one color; peaks; VU rows (the three bar animations of `kfc_fw` in one). Built 2026-10-21 as "Spectrum": a rainbow bar per band from the bottom, a narrower canvas shows the loudest band of each group; a dim line while there are no bars |
 
-A shared palette system serves every animation that takes colors.
+A shared palette system serves every animation that takes colors (not built). The new
+animations of 2026-10-21 are host tested (they draw, move, follow the sound) and timed on the
+host only; how they look on the matrix is open.
 
 ---
 
@@ -284,9 +367,15 @@ publishes what changed; the sensors every 30 s. Commands go to the render task.
 | button | `restart` | restart | yes |
 | select | | palette, preset, playlist | no |
 | number | | intensity, transition time | no |
-| switch | | reactive, playlist running | no |
+| select | `rotation/set`, `rotation/state` | the current animation's rotation: 0, 90, 180, 270 | yes |
+| switch | `reactive/set`, `reactive/state` | "Reacts to sound", the current animation's switch, with an audio source (announced again, or removed, when a UDP input is switched on or off; Spectrum is in the effect list only with a source) | yes |
+| number | `strength/set`, `strength/state` | "Sound strength", the current animation's, 0 to 255, with an audio source | yes |
+| switch | | playlist running | no |
 | sensor | | temperature, light | no |
-| text | | overlay text | no |
+| select | `overlay/set`, `overlay/state` | the overlay: off, text, clock | yes |
+| text | `overlay_text/set`, `overlay_text/state` | the overlay text, 63 bytes | yes |
+| number | `attack/set`, `release/set` and `/state` | "Sound attack" and "Sound release", the current animation's, ms, with an audio source | yes |
+| select | `power_on/set`, `power_on/state` | at power on: restore, off, on (config) | yes |
 
 ---
 
@@ -300,8 +389,9 @@ settings (section 8.1 there).
   short pulse per motion, every pulse sets the hold back to the minutes, and when it runs out
   without another pulse the detected state clears, the LEDs fade off and the mark "off by
   motion" is set; the next motion switches them on again, but only after an auto off. Every on
-  or off by a person (web, MQTT, console) clears the mark. The mark is not stored: after a power
-  cut the LEDs stay as they were stored. The first build had a second countdown after the
+  or off by a person (web, MQTT, console) clears the mark. The mark is stored (key `boot`): with
+  "at power on: as before" (section 5) the LEDs stay off after a restart and come on with the
+  next motion. The first build had a second countdown after the
   sensor's fixed 5 min hold (from the hassctrl base), so the LEDs went off 5 + N minutes after
   the last motion; dropped 2026-10-20.
 * **Buttons**: click, long press and hold, each with an action (on/off, next animation, next
@@ -320,8 +410,14 @@ settings (section 8.1 there).
 * **Preset**: an animation with its parameters and the brightness, stored on LittleFS, part of the
   backup's presets part.
 * **Playlist**: presets with a time each, cycled.
-* **Text and clock overlay**: a bitmap font drawn over any animation on a matrix: scrolling text
-  (also set over MQTT) or the time.
+* **Text and clock overlay** (built 2026-10-21, `px/effects/overlay.hpp`, host tested): a 5 x 7
+  font, proportional, ASCII and the German letters (UTF-8), drawn over any animation in its own
+  color, centered vertically: a text (63 bytes) centered when it fits, else scrolling (5 to 50
+  pixels a second), or the clock "hh:mm" (24 or 12 hours, the colon blinking; 3 x 5 digits when
+  the 5 x 7 ones do not fit, as on the 24 wide test matrix), shown once the time is known. LEDs
+  page card "Overlay", `POST /api/leds/overlay`, Home Assistant select "Overlay" and text "Overlay
+  text", console `leds overlay`, backup `leds.overlay`, NVS key `overlay`. Not tried on the
+  matrix yet.
 
 ---
 
@@ -334,6 +430,8 @@ settings (section 8.1 there).
    layout page of the web UI (done, 2026-10-19).
 4. Animations, palettes, crossfade, presets and playlists.
 5. MQTT and Home Assistant discovery.
-6. Audio: microphone (built 2026-10-21 with the spectrum), WARLS, WLED audio sync; reactivity.
+6. Audio: microphone (built 2026-10-21 with the spectrum), WARLS, WLED audio sync (built
+   2026-10-21); reactivity.
 7. Optional hardware: buttons, encoder, motion, power switch, light, temperature.
-8. Realtime input, live preview over a WebSocket, text and clock overlay, custom shapes.
+8. Realtime input, live preview over a WebSocket and text and clock overlay (built
+   2026-10-21), custom shapes.

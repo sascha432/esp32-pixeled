@@ -27,6 +27,10 @@ bool running();
 // Relay `relay` (1-based) on or off; false when there is no such relay. From any task.
 bool set(unsigned relay, bool on);
 
+// Relay `relay` goes off in the panic handler, before the crash is printed (docs/leds.md section
+// 5: the LED supply). Once, after start().
+void off_at_crash(unsigned relay);
+
 // Whether relay `relay` is on, read from its pin; false for a relay that is not there.
 bool is_on(unsigned relay);
 

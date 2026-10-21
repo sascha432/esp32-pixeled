@@ -9,7 +9,7 @@ window.pxLeds = (() => {
   // ----------------------------------------------------------------------------- the LEDs page
 
   async function leds() {
-    render(`<h1>LEDs</h1><div id="leds-control">Loading ...</div><div id="leds-motion"></div><div id="leds-config"></div>`);
+    render(`<h1>LEDs</h1><div id="leds-live"></div><div id="leds-control">Loading ...</div><div id="leds-overlay"></div><div id="leds-motion"></div><div id="leds-audio"></div><div id="leds-config"></div>`);
     let s = await api("/api/leds");
 
     const statusFacts = () => facts([
@@ -17,8 +17,12 @@ window.pxLeds = (() => {
         : s.supply_on ? `on, ${s.fps} fps` : "off"],
       ["Power", s.supply_on ? `${watts(s.power_mw)}${s.limited ? ' <span class="badge text-bg-warning">limited</span>' : ""}` : "-"],
       ["LEDs", s.leds ? `${s.leds} on ${s.lanes} lanes, canvas ${s.width} x ${s.height}` : "none"],
+      ...(s.audio.source ? [["Sound", s.audio.hears ? "hears sound" : "silence"]] : []),
     ]);
     const effectOf = (slug) => s.effects.find((e) => e.slug === slug) || {};
+    // an animation that needs sound only with a source (the current one stays listed)
+    const listed = (e) => e.reactive !== "required" || s.audio.source || e.slug === s.effect;
+    const live = preview();
 
     $("#leds-control").innerHTML = card("Light", `
       <div class="form-check form-switch mb-3">
@@ -29,7 +33,7 @@ window.pxLeds = (() => {
       <input id="leds-brightness" type="range" class="form-range mb-3" min="1" max="255" value="${s.brightness}">
       <label class="form-label" for="leds-effect">Animation</label>
       <select id="leds-effect" class="form-select mb-3">
-        ${s.effects.map((e) => `<option value="${esc(e.slug)}" ${e.slug === s.effect ? "selected" : ""}>${esc(e.name)}</option>`).join("")}
+        ${s.effects.filter(listed).map((e) => `<option value="${esc(e.slug)}" ${e.slug === s.effect ? "selected" : ""}>${esc(e.name)}</option>`).join("")}
       </select>
       <div id="leds-color-row" class="mb-3">
         <label class="form-label" for="leds-color">Color</label>
@@ -37,12 +41,55 @@ window.pxLeds = (() => {
       </div>
       <label class="form-label" for="leds-speed">Speed <span id="leds-speed-value" class="text-body-secondary">${s.speed}</span></label>
       <input id="leds-speed" type="range" class="form-range mb-3" min="0" max="255" value="${s.speed}">
+      <div class="row g-3 mb-3 align-items-end">
+        <div class="col-auto"><label class="form-label" for="leds-rotation">Rotation</label>
+          <select id="leds-rotation" class="form-select">
+            ${[0, 90, 180, 270].map((r) => `<option value="${r}">${r}°</option>`).join("")}
+          </select></div>
+        <div class="col-auto" id="leds-reactive-row"><div class="form-check form-switch mb-2">
+          <input class="form-check-input" type="checkbox" role="switch" id="leds-reactive">
+          <label class="form-check-label" for="leds-reactive">Reacts to sound</label></div></div>
+      </div>
+      <div id="leds-strength-row">
+        <label class="form-label" for="leds-strength">Strength <span id="leds-strength-value" class="text-body-secondary">${s.strength}</span></label>
+        <input id="leds-strength" type="range" class="form-range mb-1" min="0" max="255" value="${s.strength}">
+        <div class="form-text mb-2">How strongly the animation follows the sound: 128 as built, 255 twice as much, 0 not at all.</div>
+        <div class="row g-3">
+          <div class="col-sm-6"><label class="form-label" for="leds-attack">Attack <span id="leds-attack-value" class="text-body-secondary">${s.attack}</span> ms</label>
+            <input id="leds-attack" type="range" class="form-range" min="0" max="2000" step="10" value="${s.attack}"></div>
+          <div class="col-sm-6"><label class="form-label" for="leds-release">Release <span id="leds-release-value" class="text-body-secondary">${s.release}</span> ms</label>
+            <input id="leds-release" type="range" class="form-range" min="0" max="5000" step="10" value="${s.release}"></div>
+        </div>
+        <div class="form-text mb-2">How fast it follows a louder sound (attack) and lets go when it gets quieter (release):
+          20 and 250 ms as built; a long release lets the bars and the light fall slowly.</div>
+      </div>
+      <div class="form-text mb-3">Rotation and the sound settings are kept for each animation.</div>
       <div id="leds-status">${statusFacts()}</div>`);
 
     const showColor = () => ($("#leds-color-row").hidden = !effectOf($("#leds-effect").value).color);
     showColor();
+    // the current animation's rotation and sound switch; the switch only for one that can react,
+    // with an audio source
+    const showStyle = () => {
+      $("#leds-rotation").value = String(s.rotation);
+      $("#leds-reactive").checked = s.reactive;
+      const reactive = effectOf(s.effect).reactive;
+      const canReact = s.audio.source && reactive === "optional";
+      $("#leds-reactive-row").hidden = !canReact;
+      // the strength, attack and release with the switch on (always for one that needs sound); not
+      // moved while a slider is being dragged
+      $("#leds-strength-row").hidden = !s.audio.source || !((canReact && s.reactive) || reactive === "required");
+      for (const key of ["strength", "attack", "release"]) {
+        if (document.activeElement !== $(`#leds-${key}`)) {
+          $(`#leds-${key}`).value = String(s[key]);
+          $(`#leds-${key}-value`).textContent = s[key];
+        }
+      }
+    };
+    showStyle();
     const send = (form) => api("/api/leds", form).then((answer) => {
       s = answer;
+      showStyle();
       $("#leds-status").innerHTML = statusFacts();
       if ($("#motion-status")) $("#motion-status").innerHTML = motionFacts();
     }).catch((e) => toast(e.message, "danger"));
@@ -58,9 +105,15 @@ window.pxLeds = (() => {
     };
     slider("#leds-brightness", "brightness");
     slider("#leds-speed", "speed");
+    slider("#leds-strength", "strength");
+    slider("#leds-attack", "attack");
+    slider("#leds-release", "release");
     $("#leds-on").onchange = (e) => send({ on: e.target.checked ? "1" : "0" });
     $("#leds-effect").onchange = (e) => { showColor(); send({ effect: e.target.value }); };
+    overlayCard(s, (answer) => { s = answer; });
     $("#leds-color").oninput = (e) => send({ color: e.target.value });
+    $("#leds-rotation").onchange = (e) => send({ rotation: e.target.value });
+    $("#leds-reactive").onchange = (e) => send({ reactive: e.target.checked ? "1" : "0" });
 
     // motion auto off: only with a sensor
     const motionFacts = () => {
@@ -98,6 +151,14 @@ window.pxLeds = (() => {
             <input id="cfg-fade" type="number" class="form-control" min="0" max="10000" value="${c.fade_ms}"></div>
           <div class="col-sm-6"><label class="form-label" for="cfg-settle">Supply settle time (ms)</label>
             <input id="cfg-settle" type="number" class="form-control" min="0" max="2000" value="${c.settle_ms}"></div>
+          <div class="col-sm-6"><label class="form-label" for="cfg-crossfade">Crossfade between animations (ms, 0: none)</label>
+            <input id="cfg-crossfade" type="number" class="form-control" min="0" max="10000" value="${c.crossfade_ms}"></div>
+          <div class="col-sm-6"><label class="form-label" for="cfg-power-on">At power on</label>
+            <select id="cfg-power-on" class="form-select">
+              <option value="restore" ${c.power_on === "restore" ? "selected" : ""}>As before (also "off by motion")</option>
+              <option value="off" ${c.power_on === "off" ? "selected" : ""}>Off</option>
+              <option value="on" ${c.power_on === "on" ? "selected" : ""}>On</option>
+            </select></div>
           <div class="col-sm-6"><label class="form-label" for="cfg-channel">One color of one LED at full (mW)</label>
             <input id="cfg-channel" type="number" class="form-control" min="1" max="1000" value="${c.channel_mw}"></div>
           <div class="col-sm-6"><label class="form-label" for="cfg-idle">One LED while dark (mW)</label>
@@ -121,6 +182,7 @@ window.pxLeds = (() => {
         s = await api("/api/leds/config", {
           power_limit_mw: Math.round(Number($("#cfg-limit").value) * 1000), fps: $("#cfg-fps").value,
           fade_ms: $("#cfg-fade").value, settle_ms: $("#cfg-settle").value,
+          crossfade_ms: $("#cfg-crossfade").value, power_on: $("#cfg-power-on").value,
           channel_mw: $("#cfg-channel").value, idle_mw: $("#cfg-idle").value, driver: $("#cfg-driver").value,
           dither: $("#cfg-dither").checked ? "1" : "0",
         });
@@ -128,13 +190,212 @@ window.pxLeds = (() => {
       });
     };
 
+    // the sound input: the microphone's settings, the UDP inputs and a live readout
+    const mic = await soundInput();
+
+    // every 500 ms the sound's readout, every 2 s the LED status; the live preview stops with the
+    // page (the refresh runs no more)
+    let tick = 0;
     refresh(async () => {
+      live.alive();
+      if (mic) await mic.update();
+      if (tick++ % 4 !== 0) return;
       s = await api("/api/leds");
       const box = $("#leds-status");
       if (box) box.innerHTML = statusFacts();
       const motion = $("#motion-status");
       if (motion) motion.innerHTML = motionFacts();
-    }, 2000);
+    }, 500);
+  }
+
+  // The card "Sound input": the analysis as it runs (32 bars, the levels), the microphone's settings
+  // (with one) and the UDP inputs. Returns { update } for the page's refresh, null without the API.
+  async function soundInput() {
+    let a;
+    try {
+      a = await api("/api/audio");
+    } catch (e) {
+      return null;
+    }
+    const c = a.settings;
+    const sources = { microphone: "microphone", warls: "WARLS (UDP)", wled: "WLED audio sync" };
+    const db = (v) => `${Number(v).toFixed(1)} dB`;
+    const readout = () => `
+      <div class="d-flex align-items-end gap-1 mb-2" style="height:64px" aria-label="the 32 bands, bass on the left">
+        ${a.bands.map((b) => `<div class="flex-fill rounded-top ${a.active ? "bg-primary" : "bg-secondary"}"
+          style="height:${Math.max(2, Math.round(b / 255 * 64))}px"></div>`).join("")}
+      </div>
+      ${facts([
+        ["From", sources[a.source] || "nothing"],
+        ["Input", a.active ? `sound${a.beat ? ' <span class="badge text-bg-warning">beat</span>' : ""}` : "silence"],
+        ...(a.source === "microphone" ? [["Loudest band", db(a.loudest_db)], ["Reference", db(a.reference_db)]] : []),
+        ...(a.source === "warls" || a.source === "wled" ? [["Packets", a.packets]] : []),
+        ["Loudness", `${a.loudness} of 255`],
+      ])}`;
+    const i = a.inputs;
+    $("#leds-audio").innerHTML = card("Sound input", `
+      <div id="mic-readout">${readout()}</div>
+      <form id="udp-form" class="mt-3">
+        <div class="row g-3">
+          <div class="col-sm-6 d-flex align-items-end"><div class="form-check form-switch">
+            <input class="form-check-input" type="checkbox" role="switch" id="udp-warls" ${i.warls ? "checked" : ""}>
+            <label class="form-check-label" for="udp-warls">WARLS spectrum over UDP</label></div></div>
+          <div class="col-sm-6"><label class="form-label" for="udp-port">WARLS port</label>
+            <input id="udp-port" type="number" class="form-control" min="1" max="65535" value="${i.warls_port}"></div>
+          <div class="col-sm-6"><div class="form-check form-switch">
+            <input class="form-check-input" type="checkbox" role="switch" id="udp-wled" ${i.wled_sync ? "checked" : ""}>
+            <label class="form-check-label" for="udp-wled">WLED audio sync (multicast, port 11988)</label></div></div>
+        </div>
+        <div class="form-text mt-2">Another device sends what it hears: a PC (tools/audio_send.py, the kfc_fw audio
+          analyzer), a WLED sound reactive device or LedFx. While its packets come they are used instead of the
+          microphone.</div>
+        <div class="d-flex justify-content-end mt-3"><button class="btn btn-primary" type="submit">Save</button></div>
+      </form>
+      <form id="mic-form" class="mt-3" ${a.microphone ? "" : "hidden"}>
+        <h3 class="h6">Microphone</h3>
+        <div class="row g-3">
+          <div class="col-sm-6"><label class="form-label" for="mic-gain">Gain (dB, -20 to 40)</label>
+            <input id="mic-gain" type="number" class="form-control" min="-20" max="40" value="${c.gain_db}"></div>
+          <div class="col-sm-6 d-flex align-items-end"><div class="form-check form-switch">
+            <input class="form-check-input" type="checkbox" role="switch" id="mic-agc" ${c.agc ? "checked" : ""}>
+            <label class="form-check-label" for="mic-agc">Automatic gain</label></div></div>
+          <div class="col-sm-6"><label class="form-label" for="mic-silence">Silence below (dB, -90 to -20)</label>
+            <input id="mic-silence" type="number" class="form-control" min="-90" max="-20" value="${c.silence_db}"></div>
+          <div class="col-sm-6"><label class="form-label" for="mic-range">Range (dB, 10 to 80)</label>
+            <input id="mic-range" type="number" class="form-control" min="10" max="80" value="${c.range_db}"></div>
+          <div class="col-sm-6"><label class="form-label" for="mic-beat">Beat when the bass is (x, 1.2 to 3.0)</label>
+            <input id="mic-beat" type="number" class="form-control" min="1.2" max="3" step="0.1" value="${(c.beat_ratio_tenths / 10).toFixed(1)}"></div>
+        </div>
+        <div class="form-text mt-2">The loudest band must be above the silence level, or the input is silence: set it a
+          little above what a quiet room shows. With automatic gain the bars follow the music's own loudness and the gain
+          only moves the silence point; without it the gain decides how full the bars get (0 dB at the top). The range is
+          what the bars show below the top: smaller is livelier.</div>
+        <div class="d-flex justify-content-end mt-3"><button class="btn btn-primary" type="submit">Save</button></div>
+      </form>`);
+    $("#udp-form").onsubmit = (e) => {
+      e.preventDefault();
+      busy(e.submitter || $("#udp-form button"), async () => {
+        a = await api("/api/audio", {
+          warls: $("#udp-warls").checked ? "1" : "0", warls_port: $("#udp-port").value,
+          wled_sync: $("#udp-wled").checked ? "1" : "0",
+        });
+        toast("saved: the LEDs page shows the sound settings once there is a source", "success");
+      });
+    };
+    $("#mic-form").onsubmit = (e) => {
+      e.preventDefault();
+      busy(e.submitter || $("#mic-form button"), async () => {
+        a = await api("/api/audio", {
+          gain_db: $("#mic-gain").value, agc: $("#mic-agc").checked ? "1" : "0",
+          silence_db: $("#mic-silence").value, range_db: $("#mic-range").value,
+          beat_ratio_tenths: Math.round(Number($("#mic-beat").value) * 10),
+        });
+        toast("saved", "success");
+      });
+    };
+    return {
+      update: async () => {
+        a = await api("/api/audio");
+        const box = $("#mic-readout");
+        if (box) box.innerHTML = readout();
+      },
+    };
+  }
+
+  // The card "Overlay": text or the clock over every animation. `update` takes the answer.
+  function overlayCard(s, update) {
+    const o = s.overlay;
+    $("#leds-overlay").innerHTML = card("Overlay", `
+      <form id="overlay-form">
+        <div class="row g-3">
+          <div class="col-sm-6"><label class="form-label" for="overlay-mode">Show</label>
+            <select id="overlay-mode" class="form-select">
+              ${[["off", "Nothing"], ["text", "Text"], ["clock", "The clock"]].map(([v, t]) =>
+                `<option value="${v}" ${o.mode === v ? "selected" : ""}>${t}</option>`).join("")}
+            </select></div>
+          <div class="col-sm-6"><label class="form-label" for="overlay-color">Color</label>
+            <input id="overlay-color" type="color" class="form-control form-control-color" value="${esc(o.color)}"></div>
+          <div class="col-12" id="overlay-text-row"><label class="form-label" for="overlay-text">Text</label>
+            <input id="overlay-text" class="form-control" maxlength="63" value="${esc(o.text)}"></div>
+          <div class="col-sm-6" id="overlay-speed-row"><label class="form-label" for="overlay-speed">Scroll speed
+            <span id="overlay-speed-value" class="text-body-secondary">${o.speed}</span></label>
+            <input id="overlay-speed" type="range" class="form-range" min="0" max="255" value="${o.speed}"></div>
+          <div class="col-sm-6 d-flex align-items-end" id="overlay-24h-row"><div class="form-check form-switch">
+            <input class="form-check-input" type="checkbox" role="switch" id="overlay-24h" ${o.clock_24h ? "checked" : ""}>
+            <label class="form-check-label" for="overlay-24h">24 hours</label></div></div>
+        </div>
+        <div class="form-text mt-2">A text wider than the matrix scrolls; the clock needs the time from the network.</div>
+        <div class="d-flex justify-content-end mt-3"><button class="btn btn-primary" type="submit">Save</button></div>
+      </form>`);
+    const show = () => {
+      const mode = $("#overlay-mode").value;
+      $("#overlay-text-row").hidden = mode !== "text";
+      $("#overlay-speed-row").hidden = mode !== "text";
+      $("#overlay-24h-row").hidden = mode !== "clock";
+    };
+    show();
+    $("#overlay-mode").onchange = show;
+    $("#overlay-speed").oninput = (e) => ($("#overlay-speed-value").textContent = e.target.value);
+    $("#overlay-form").onsubmit = (e) => {
+      e.preventDefault();
+      busy(e.submitter || $("#overlay-form button"), async () => {
+        update(await api("/api/leds/overlay", {
+          mode: $("#overlay-mode").value, text: $("#overlay-text").value, color: $("#overlay-color").value,
+          speed: $("#overlay-speed").value, clock_24h: $("#overlay-24h").checked ? "1" : "0",
+        }));
+        toast("saved", "success");
+      });
+    };
+  }
+
+  // The card "Live": the canvas as drawn, over a WebSocket (GET /api/leds/live). Shown while the page
+  // is open: alive() comes with every refresh; without it for 3 s (another page) the socket closes.
+  function preview() {
+    $("#leds-live").innerHTML = card("Live", `
+      <div><canvas id="live-canvas" class="border rounded" style="max-width:100%;image-rendering:pixelated"></canvas></div>
+      <div id="live-state" class="small text-body-secondary mt-1">connecting ...</div>`);
+    let socket = null;
+    let seen = Date.now();
+    const open = () => {
+      socket = new WebSocket(`${location.protocol === "https:" ? "wss" : "ws"}://${location.host}/api/leds/live`);
+      socket.binaryType = "arraybuffer";
+      socket.onmessage = (m) => draw(new Uint8Array(m.data));
+      socket.onclose = () => {
+        const state = $("#live-state");
+        if (state) state.textContent = "no preview (more than 4 open, or the connection closed)";
+        socket = null;
+      };
+    };
+    const draw = (data) => {
+      const canvas = $("#live-canvas");
+      if (!canvas) { socket?.close(); return; }
+      const width = data[0] | (data[1] << 8), height = data[2] | (data[3] << 8);
+      const cell = Math.max(2, Math.min(16, Math.floor((canvas.parentElement.clientWidth - 2) / Math.max(1, width))));
+      if (canvas.width !== width * cell || canvas.height !== height * cell) {
+        canvas.width = width * cell;
+        canvas.height = height * cell;
+      }
+      const ctx = canvas.getContext("2d");
+      ctx.fillStyle = "#000";
+      ctx.fillRect(0, 0, canvas.width, canvas.height);
+      for (let y = 0, i = 4; y < height; y++) {
+        for (let x = 0; x < width; x++, i += 3) {
+          if (data[i] | data[i + 1] | data[i + 2]) {
+            ctx.fillStyle = `rgb(${data[i]},${data[i + 1]},${data[i + 2]})`;
+            ctx.fillRect(x * cell + 1, y * cell + 1, cell - 1, cell - 1);
+          }
+        }
+      }
+      $("#live-state").textContent = `${width} x ${height}, as drawn (before the brightness)`;
+    };
+    open();
+    const watchdog = setInterval(() => {
+      if (Date.now() - seen > 3000 || !$("#live-canvas")) {
+        clearInterval(watchdog);
+        socket?.close();
+      }
+    }, 1000);
+    return { alive: () => { seen = Date.now(); if (!socket && $("#live-canvas")) open(); } };
   }
 
   // ---------------------------------------------------------------------------- the layout page

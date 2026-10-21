@@ -105,9 +105,9 @@ outputs, `mqtt` and `audio` ([leds.md](leds.md), [TODO.md](TODO.md)).
 | `board` | `esp_driver_i2c` | no | The constants of the board (pins of a new device), the image tag, the shared I2C bus (section 8) |
 | `output` | `esp_driver_rmt` | no | The LED lanes: the RMT backend ([leds.md](leds.md) section 2.2) |
 | `layout` | `memory` | yes | Canvas and panels, the table canvas -> LED ([leds.md](leds.md) section 4.1) |
-| `effects` | nothing | yes | The animations: canvas, parameters, time ([leds.md](leds.md) section 6) |
+| `effects` | nothing | yes | The animations: canvas, parameters, time, the memory between frames, the rotation, the audio for the reactive ones ([leds.md](leds.md) section 6) |
 | `leds` | `effects`, `layout`, `output`, `platform` | `frame.cpp` | The render task: state, fade, gamma, power limit, the supply, NVS ([leds.md](leds.md) section 3) |
-| `audio` | `effects` | `analysis.cpp` | The I2S microphone: its task, the FFT, bands, gain and beat; the render task takes the result with each frame ([leds.md](leds.md) section 6.1) |
+| `audio` | `effects`, `platform`, `webserver` | `analysis.cpp` | The I2S microphone: its task, the FFT, bands, gain and beat, its settings (NVS) and `/api/audio`; the render task takes the result with each frame ([leds.md](leds.md) section 6.1) |
 | `leds_api` | `leds`, `webserver` | no | `/api/leds`, registered by main through `webserver::Config::add_routes` |
 | `hass` | `espressif/mqtt`, `cjson`, `leds`, `webserver` | no | Home Assistant over MQTT: connection, discovery, commands, state; `/api/mqtt` ([leds.md](leds.md) section 8) |
 | `relay`, `motion`, `light_sensor` | GPIO, I2C, ADC drivers | no | Optional hardware (section 9.6) |
@@ -262,8 +262,22 @@ fits every wiring of a board (not built: `main` uses the board's pins as they ar
   (`esp_wifi_set_storage(WIFI_STORAGE_RAM)`), so `network` is the only owner of the networks.
 * **Settings** are one blob per owner (a POD struct with a range check on load and defaults for
   anything out of range). A struct that changes gets a new size; the loader converts an older
-  size. Live controls such as sliders are written with a delay (`settings_later`, 5 s after the
-  last change), forms on save.
+  size.
+* **The write policy** (`px/platform/settings.hpp`):
+
+  | Kind of value | Written | Examples |
+  | --- | --- | --- |
+  | changed by a live control or by using the device, in bursts | `platform::set_blob_later`: 10 s after the last change, at most 60 s after the first, and at a restart | `leds/state` (on, brightness, animation, color, speed), `leds/styles` (rotation, reactive, strength, attack, release; sliders and Home Assistant numbers) |
+  | saved by an explicit action (Save, a form), or a secret | at once, with commit; a failure is reported | Wi-Fi networks, policy and hotspot, web UI login, MQTT settings and password, LED layout, config, lanes, overlay, auto off, audio settings and inputs |
+  | device state that changes rarely | at once, when it changed | `leds/boot` (switched off by motion), `network/last_seen`, the time zone |
+  | developer and calibration | at once | console log level, `logbuf/debug`, the light sensor |
+
+  Nothing writes per frame: a value that can change more often than about once a minute takes
+  the delayed write. Its owner reads it from its RAM copy, not back from NVS. NVS skips a value
+  that did not change, so writing the same one again costs no flash. The delayed table has 8
+  keys of up to 288 bytes; a ninth key writes the waiting ones at once. A factory reset drops the
+  waiting values, so none of them comes back with the restart. A backup import sets the live
+  values through the same calls, so they are stored within 10 s.
 * **Backup**: one YAML file with two parts, the settings and the presets
   (`config::backup::Part`). The sections come from a table filled in `main/backup.cpp`; each
   writes its fields and reads them back. An import is checked completely first and applied only
@@ -278,9 +292,9 @@ fits every wiring of a board (not built: `main` uses the board's pins as they ar
 | --- | --- |
 | `platform` | boot log, both NVS partitions, LittleFS at `/fs`, the settings class, the device name (`pixeled-` and the last two MAC bytes), SNTP and the time zone (`time_sync.cpp`, the IANA zone table in `timezone.cpp`, built by `tools/build_timezones.py`) |
 | `network` | the station and hotspot state machine of sections 9.1 and 9.2, up to 5 stored networks, the hotspot password, scan results, stored in the settings NVS. One task owns the driver and the state; commands are queued, readers get copies (`status()`). Files: `network.cpp` (the state, the task, start), `station.cpp` (scan, connect, retry, roam), `commands.cpp` (the saved networks), `api.cpp` (the calls of other tasks). mDNS: the device answers as `<device name>.local` and announces `_http._tcp`, in both apps |
-| `webserver` | captive portal DNS and redirect, the status API and the built-in page, the setup pages, login, Wi-Fi, hotspot, update, files, log and backup API. Serves the web files from LittleFS, with a recovery page compiled in that works without the file system ([ui/web/web-recovery.md](ui/web/web-recovery.md)). `Config::add_routes` lets `main` register more routes (the LED API, not built) |
+| `webserver` | captive portal DNS and redirect, the status API and the built-in page, the setup pages, login, Wi-Fi, hotspot, update, files, log and backup API. Serves the web files from LittleFS, with a recovery page compiled in that works without the file system ([ui/web/web-recovery.md](ui/web/web-recovery.md)). `Config::add_routes` lets `main` register more routes (the LED, audio and MQTT API). Routes are made with `detail::route()` (the main firmware has WebSocket support, `CONFIG_HTTPD_WS_SUPPORT`, which adds fields to `httpd_uri_t`) |
 | `ota` | firmware and file system images from an upload, a tool or a URL download, app rollback ([ui/web/web-app.md](ui/web/web-app.md) section 5), restart into the recovery app and back, partition layout of section 9.5 |
-| `devconsole` | serial command line for development (`CONFIG_PX_DEV_CONSOLE`): Wi-Fi networks, hotspot, file system, memory, log level, light sensor, relay, motion sensor, restart, factory reset (`help` lists them) |
+| `devconsole` | serial command line for development (`CONFIG_PX_DEV_CONSOLE`): Wi-Fi networks, hotspot, file system, memory, log level, light sensor, relay, motion sensor, audio, LEDs, restart, factory reset, a crash on purpose (`crash yes`) (`help` lists them) |
 | `logbuf` | the log in a ring buffer for the web UI's log page |
 | `relay` | relays on GPIOs: the LED power supply (section 9.6) |
 | `motion` | a motion sensor on a GPIO (section 9.6) |
@@ -330,9 +344,11 @@ one that is not fitted or does not answer is logged and left out.
 
 * **LED power switch** (`relay`, `Info::power_gpio`): a relay or MOSFET in the supply of the LEDs.
   Low before the pin becomes an output, so the LEDs are off while the board starts; the recovery
-  app drives it off too. The LED engine will switch it on before the first frame (after a
-  settle time) and off after the LEDs faded out, and force it off in the panic handler
-  ([leds.md](leds.md) section 5; not built: the switch stays off). Relay 1 is the supply
+  app drives it off too. The LED engine switches it on before the first frame (after a settle
+  time) and off after the LEDs faded out. The panic handler switches it off first
+  (`relay::off_at_crash`; `relay` wraps `esp_panic_handler` with `-Wl,--wrap`, as ESP-IDF's
+  Bluetooth controller does, the wrapper in IRAM writes the pin's register), see
+  [leds.md](leds.md) section 5. Relay 1 is the supply
   (active high or low, `Info::power_active_high`), relay 2 its indicator LED
   (`Info::power_led_gpio`); console `relay 1 on` switches the supply by hand.
 * **Motion sensor** (`motion`, `Info::motion_gpio`, `motion_active_high`): sampled every 100 ms by

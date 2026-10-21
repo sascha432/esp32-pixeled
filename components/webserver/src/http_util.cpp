@@ -150,14 +150,19 @@ esp_err_t send_error(httpd_req_t *req, const char *status, const char *message)
     return httpd_resp_send(req, json.c_str(), static_cast<ssize_t>(json.length()));
 }
 
-bool require_login(httpd_req_t *req)
+bool logged_in(httpd_req_t *req)
 {
     if (!auth::has_user()) {
         return true; // setup mode: open until the first login exists (docs/ui/web/web-app.md section 1)
     }
     char token[auth::kTokenSize];
     char user[auth::kUsernameSize];
-    if (session_token(req, token) && auth::check_token(token, user)) {
+    return session_token(req, token) && auth::check_token(token, user);
+}
+
+bool require_login(httpd_req_t *req)
+{
+    if (logged_in(req)) {
         return true;
     }
     send_error(req, "401 Unauthorized", "login required");

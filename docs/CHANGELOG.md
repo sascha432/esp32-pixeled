@@ -17,7 +17,75 @@ Added
 * Animation "Spectrum": a rainbow bar per band from the bottom; a dim line without sound.
 * Console `audio [status|watch [s]]`: the analysis, the bands as digits.
 * Host tests of the analysis (FFT, bands, gain, fall, silence, beat).
+* Animation "Fire": flames rising from the bottom, the speed sets how fast they move.
+* Rotation per animation: 0, 90, 180 or 270 degrees. LEDs page, Home Assistant select
+  "Rotation", console `leds rotate`, backup `leds.animations`.
+* "Reacts to sound" per animation for rainbow, plasma, breathe and fire: faster and brighter with
+  the music, beats move the colors or spark the fire. LEDs page (with an audio source), Home
+  Assistant switch, console `leds reactive on|off`; the status shows whether it hears sound.
+* Animations keep memory between frames (the render task gives it); host tests for the rotation,
+  fire and the reactions.
+* "Strength" per animation for the sound (0 to 255, 128 as before): a slider under "Reacts to
+  sound", Home Assistant number "Sound strength", console `leds strength`, backup.
+* Microphone settings: gain, automatic gain on or off, silence level, range and beat threshold.
+  LEDs page card "Microphone" with the 32 bands and the levels live, `GET/POST /api/audio`,
+  console `audio set ...`, backup section `audio`.
+* Attack and release per animation (how fast it follows the sound up and down, 20 and 250 ms as
+  before): sliders next to the strength, Home Assistant numbers, console `leds attack|release`,
+  backup `attack_ms`, `release_ms`. The bands of fire and spectrum follow them too.
+* UDP sound inputs: WARLS spectrum packets (port 21324, a setting) and WLED audio sync (multicast
+  239.0.0.1:11988); while packets come they replace the microphone. Card "Sound input" on the
+  LEDs page, `POST /api/audio` `warls`, `warls_port`, `wled_sync`, console `audio set
+  warls|port|wled`, backup `audio`.
+* `tools/audio_send.py`: sends WARLS or WLED sync packets from the PC, a demo signal (120 beats a
+  minute) or the PC's sound input.
+* Animations gradient, color fade, twinkle, meteor, ripple, matrix rain and noise, each with or
+  without sound; host tests.
+* Crossfade between animations (1 s, `crossfade_ms` on the LEDs page, console `leds crossfade`,
+  backup).
+* Text and clock overlay over every animation: card "Overlay", `POST /api/leds/overlay`, Home
+  Assistant select "Overlay" and text "Overlay text", console `leds overlay`, backup
+  `leds.overlay`; host tests of the font.
+* Live preview on the LEDs page over a WebSocket (`GET /api/leds/live`).
+* At power on: as before (default), off or on (`power_on`; LEDs page, Home Assistant select,
+  console `leds poweron`, backup). "As before" keeps "switched off by motion" over a restart.
+* The LED supply goes off in the panic handler, before the crash is printed.
+* Console `crash yes`: a crash on purpose, to try the panic handler and the crash count.
+* Console `leds bench` also prints the I2S encoder's longest interrupt of the last frame;
+  `leds bench encode` times the encoder alone on the slowest data (every bit set), nothing sent.
 
+Changed
+
+* The animation "Test: edges" moved behind "Fire" in the list, and behind the new animations.
+* ESP32 I2S output: the frame is encoded into a ring of 4 small DMA buffers while it is sent
+  (15 KB for any count instead of 147 KB for 1024 LEDs per lane): 3 or 8 x 1024 LEDs at 32 fps,
+  8 x 2048 at 16 fps. The planned 8-bit samples were dropped, they save nothing on this I2S.
+* "Spectrum" is listed (LEDs page, Home Assistant effects) only with a sound source; its bars
+  follow the strength, attack and release.
+* The audio input starts on every board (the UDP inputs need no microphone); the Home Assistant
+  sound entities come and go with a UDP input.
+* The stored config and animation styles get new fields: the values of the version before are
+  kept.
+* The web server's routes are made with `route()`: the main firmware has WebSocket support.
+* One NVS write policy (architecture.md section 9.3): live changes (on, brightness, animation,
+  color, speed, rotation, sound strength, attack, release) are stored 10 s after the last change
+  (was 5 s), at most 60 s after the first, and at a restart.
+
+Fixed
+
+* The strength, attack and release sliders and the Home Assistant style numbers wrote the flash
+  several times a second while moving; they take the delayed write.
+* Delayed settings: changes that kept coming put the write off without limit; a fifth waiting
+  value was dropped (8 can wait now, a ninth writes the others); a value changed less than 5 s
+  before a factory reset was written back during its restart.
+
+* Console `leds bench` sent the frame without the power limit (full white went to the test
+  matrix); it sends the limited frame.
+* Console `leds setup` with 8 x 2048 LEDs crashed the board: the power limit copied the black
+  frame (48 KB) a second time. A black frame is sent as it is, and a frame that does not fit is
+  reported instead of aborting.
+* A UDP input switched on crashed every boot (its socket opened before the network stack): the
+  inputs start after the network.
 ### 2026-10-20
 
 Added

@@ -10,6 +10,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <expected>
 
 #include "esp_err.h"
 
@@ -62,5 +63,13 @@ esp_err_t show(const uint8_t *rgb, size_t length, uint32_t timeout_ms = 100);
 
 // the pixels of all lanes together
 size_t pixel_count();
+
+// The parallel backend encodes while it sends: the longest time its interrupt took in the last
+// frame, in us (0 on RMT). Above 2.2 ms (three buffers) the DMA would catch up.
+uint32_t encoder_max_us();
+// Times the parallel encoder alone, without sending: every buffer of a frame with every bit of
+// every lane set (the slowest data), no LED gets it. The longest buffer in us;
+// ESP_ERR_NOT_SUPPORTED on RMT.
+std::expected<uint32_t, esp_err_t> encoder_test();
 
 } // namespace px::output

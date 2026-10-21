@@ -37,7 +37,22 @@ esp_err_t send_json(httpd_req_t *req, const JsonWriter &json);
 // {"error": message} with an HTTP status such as "401 Unauthorized"
 esp_err_t send_error(httpd_req_t *req, const char *status, const char *message);
 
+// A route for httpd_register_uri_handler. The struct has more fields with WebSocket support
+// (CONFIG_HTTPD_WS_SUPPORT, the main firmware): all zero here.
+inline httpd_uri_t route(const char *uri, httpd_method_t method, esp_err_t (*handler)(httpd_req_t *),
+                         void *user_ctx = nullptr)
+{
+    httpd_uri_t out{};
+    out.uri = uri;
+    out.method = method;
+    out.handler = handler;
+    out.user_ctx = user_ctx;
+    return out;
+}
+
 // Setup mode (no login yet) or a valid session cookie. Sends 401 and returns false otherwise.
 bool require_login(httpd_req_t *req);
+// The same without an answer: for a WebSocket, whose handshake is answered before the handler runs.
+bool logged_in(httpd_req_t *req);
 
 } // namespace px::webserver::detail

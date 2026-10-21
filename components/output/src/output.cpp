@@ -108,6 +108,22 @@ size_t pixel_count()
     return total;
 }
 
+uint32_t encoder_max_us()
+{
+    return g_count > 0 && g_driver == Driver::Parallel ? detail::i2s::encoder_max_us() : 0;
+}
+
+std::expected<uint32_t, esp_err_t> encoder_test()
+{
+    if (g_count == 0) {
+        return std::unexpected(ESP_ERR_INVALID_STATE);
+    }
+    if (g_driver != Driver::Parallel) {
+        return std::unexpected(ESP_ERR_NOT_SUPPORTED);
+    }
+    return detail::i2s::encoder_test();
+}
+
 esp_err_t show(const uint8_t *rgb, size_t length, uint32_t timeout_ms)
 {
     ESP_RETURN_ON_FALSE(g_count > 0, ESP_ERR_INVALID_STATE, kTag, "not started");

@@ -14,3 +14,6 @@ CONFIG_ESP_MAIN_TASK_STACK_SIZE=6144
 # settings writes), the line idles longer than the latch and the LEDs show garbage: seen on the
 # test matrix while the LEDs page polled (2026-10-19). Puts the handler and the encoders in IRAM.
 CONFIG_RMT_TX_ISR_CACHE_SAFE=y
+
+# The live preview of the LEDs page (components/leds_api, /api/leds/live) is a WebSocket
+CONFIG_HTTPD_WS_SUPPORT=y

@@ -2,6 +2,7 @@
 
 #include "px/audio/audio.hpp"
 
+#include <cstdio>
 #include <cstring>
 
 #include "driver/i2s_std.h"
@@ -10,17 +11,22 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/semphr.h"
 #include "freertos/task.h"
+#include "px/platform/settings.hpp"
 
 #include "analysis.hpp"
+#include "udp.hpp"
 
 namespace px::audio {
 
 namespace {
 
 constexpr const char *kTag = "audio";
+constexpr const char *kNamespace = "audio";
+constexpr const char *kKeySettings = "settings";
 
 i2s_chan_handle_t g_channel = nullptr;
 SemaphoreHandle_t g_lock = nullptr;
+bool g_microphone = false;
 // the task's own: the analysis and a block of both slots (32-bit samples)
 detail::Analyzer g_analyzer;
 int32_t g_raw[detail::kFftSize * 2];
@@ -29,6 +35,38 @@ float g_samples[detail::kFftSize];
 Status g_status = {};
 // a beat since the last frame
 bool g_beat_pending = false;
+// the settings, and a count of their changes for the task
+Settings g_settings = {};
+uint32_t g_settings_changes = 0;
+
+const char *check(const Settings &s)
+{
+    return s.gain_db < kMinGainDb || s.gain_db > kMaxGainDb             ? "gain: -20 to 40 dB"
+           : s.silence_db < kMinSilenceDb || s.silence_db > kMaxSilenceDb ? "silence level: -90 to -20 dB"
+           : s.range_db < kMinRangeDb || s.range_db > kMaxRangeDb         ? "range: 10 to 80 dB"
+           : s.beat_ratio_tenths < kMinBeatTenths || s.beat_ratio_tenths > kMaxBeatTenths
+               ? "beat threshold: 1.2 to 3.0"
+               : nullptr;
+}
+
+void load_settings()
+{
+    platform::Settings nvs(kNamespace, platform::Settings::Mode::Read);
+    Settings stored{};
+    size_t size = sizeof(stored);
+    if (nvs.ok() && nvs.get_blob(kKeySettings, &stored, size) == ESP_OK && size == sizeof(stored) &&
+        stored.version == Settings{}.version && check(stored) == nullptr) {
+        g_settings = stored;
+    }
+}
+
+void save_settings(const Settings &s)
+{
+    platform::Settings nvs(kNamespace, platform::Settings::Mode::ReadWrite);
+    if (!nvs.ok() || nvs.set_blob(kKeySettings, &s, sizeof(s)) != ESP_OK || nvs.commit() != ESP_OK) {
+        ESP_LOGW(kTag, "the settings could not be stored");
+    }
+}
 
 // the slot with the signal: the mean of the absolute values, the other slot reads 0 or noise
 int choose_slot(int current)
@@ -52,7 +90,16 @@ void task(void *)
 {
     int slot = -1;
     effects::Audio audio;
+    uint32_t applied = 0;
+    g_analyzer.configure(g_settings);
     for (;;) {
+        // new settings from the next block on
+        xSemaphoreTake(g_lock, portMAX_DELAY);
+        if (applied != g_settings_changes) {
+            applied = g_settings_changes;
+            g_analyzer.configure(g_settings);
+        }
+        xSemaphoreGive(g_lock);
         size_t read = 0;
         if (i2s_channel_read(g_channel, g_raw, sizeof(g_raw), &read, portMAX_DELAY) != ESP_OK ||
             read != sizeof(g_raw)) {
@@ -81,15 +128,8 @@ void task(void *)
     }
 }
 
-} // namespace
-
-esp_err_t start(const Config &config)
+esp_err_t start_microphone(const Config &config)
 {
-    ESP_RETURN_ON_FALSE(g_lock == nullptr, ESP_ERR_INVALID_STATE, kTag, "already started");
-    g_lock = xSemaphoreCreateMutex();
-    ESP_RETURN_ON_FALSE(g_lock != nullptr, ESP_ERR_NO_MEM, kTag, "lock");
-    g_status.slot = '?';
-
     // I2S1: the LEDs' parallel output has I2S0 (components/output)
     i2s_chan_config_t channel = I2S_CHANNEL_DEFAULT_CONFIG(I2S_NUM_1, I2S_ROLE_MASTER);
     channel.dma_desc_num = 4;
@@ -111,9 +151,46 @@ esp_err_t start(const Config &config)
     ESP_RETURN_ON_FALSE(xTaskCreatePinnedToCore(task, "audio", 4096, nullptr, 4, nullptr, core) == pdPASS,
                         ESP_ERR_NO_MEM, kTag, "task");
     g_status.running = true;
+    g_microphone = true;
     ESP_LOGI(kTag, "microphone on SCK %d, WS %d, SD %d (I2S1, %u Hz)", config.sck, config.ws, config.sd,
              static_cast<unsigned>(detail::kSampleRate));
     return ESP_OK;
+}
+
+} // namespace
+
+const char *source_name(Source source)
+{
+    switch (source) {
+    case Source::Microphone:
+        return "microphone";
+    case Source::Warls:
+        return "warls";
+    case Source::WledSync:
+        return "wled";
+    default:
+        return "";
+    }
+}
+
+esp_err_t start(const Config &config)
+{
+    ESP_RETURN_ON_FALSE(g_lock == nullptr, ESP_ERR_INVALID_STATE, kTag, "already started");
+    g_lock = xSemaphoreCreateMutex();
+    ESP_RETURN_ON_FALSE(g_lock != nullptr, ESP_ERR_NO_MEM, kTag, "lock");
+    g_status.slot = '?';
+    load_settings();
+    if (config.sd >= 0 && start_microphone(config) != ESP_OK) {
+        ESP_LOGW(kTag, "the microphone did not start");
+    }
+    ESP_RETURN_ON_ERROR(detail::load_udp(), kTag, "UDP inputs");
+    return ESP_OK;
+}
+
+esp_err_t start_udp()
+{
+    ESP_RETURN_ON_FALSE(g_lock != nullptr, ESP_ERR_INVALID_STATE, kTag, "not started");
+    return detail::start_udp_task();
 }
 
 bool running()
@@ -121,9 +198,70 @@ bool running()
     return g_lock != nullptr;
 }
 
+bool has_microphone()
+{
+    return g_microphone;
+}
+
+bool has_source()
+{
+    const Inputs i = inputs();
+    return g_microphone || i.warls || i.wled_sync;
+}
+
+void set_inputs(const Inputs &inputs)
+{
+    detail::set_udp_inputs(inputs);
+}
+
+Inputs inputs()
+{
+    return detail::udp_inputs();
+}
+
+bool set_settings(const Settings &settings, char *error, size_t error_size)
+{
+    if (const char *problem = check(settings)) {
+        std::snprintf(error, error_size, "%s", problem);
+        return false;
+    }
+    Settings s = settings;
+    s.version = Settings{}.version;
+    save_settings(s);
+    if (g_lock == nullptr) {
+        g_settings = s;
+        return true;
+    }
+    xSemaphoreTake(g_lock, portMAX_DELAY);
+    g_settings = s;
+    g_settings_changes++;
+    xSemaphoreGive(g_lock);
+    return true;
+}
+
+Settings settings()
+{
+    if (g_lock == nullptr) {
+        return g_settings;
+    }
+    xSemaphoreTake(g_lock, portMAX_DELAY);
+    const Settings out = g_settings;
+    xSemaphoreGive(g_lock);
+    return out;
+}
+
 void frame(effects::Audio &out)
 {
     if (g_lock == nullptr) {
+        out = {};
+        return;
+    }
+    // a UDP source while its packets come, else the microphone
+    Source source = Source::None;
+    if (detail::udp_frame(out, source, true)) {
+        return;
+    }
+    if (!g_microphone) {
         out = {};
         return;
     }
@@ -140,8 +278,14 @@ Status status()
         return {};
     }
     xSemaphoreTake(g_lock, portMAX_DELAY);
-    const Status out = g_status;
+    Status out = g_status;
     xSemaphoreGive(g_lock);
+    out.source = g_microphone ? Source::Microphone : Source::None;
+    if (!g_microphone) {
+        out.audio = {};
+    }
+    detail::udp_frame(out.audio, out.source, false);
+    out.packets = detail::udp_packets();
     return out;
 }
 

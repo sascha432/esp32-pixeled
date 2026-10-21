@@ -19,31 +19,44 @@ Built:
 * Firmware and file system updates by upload or URL, rollback, a recovery app in the factory
   partition.
 * Backup of the settings in one YAML file (settings and presets parts).
-* LED output: parallel by DMA on the ESP32 (I2S, up to 16 lanes; 3 x 256 LEDs at 120 fps), RMT
-  on the other chips or by choice.
+* Settings in NVS by one write policy: live changes 10 s after the last one (at most 60 s), saves
+  and secrets at once.
+* LED output: parallel by DMA on the ESP32 (I2S, up to 16 lanes, encoded into a small ring while
+  sending; 8 x 1024 LEDs at 32 fps), RMT on the other chips or by choice.
 * Layout from three answers per panel (size, first LED, rows or columns with zigzag), the web
   page draws the data path; test pattern "edges".
-* Render task: animations solid, rainbow, plasma, breathe; brightness with fade, gamma, power
-  limit with an adjustable model, the LED supply switched with a settle time; stored and restored.
-* Web: LEDs page (on, brightness, animation, color, speed, status, power and timing) and Layout.
-* MQTT with Home Assistant discovery: light with the animations as effects, speed, power, motion,
-  motion auto off, restart.
-* Motion auto off: LEDs off N minutes after the sensor clears, back on with the next motion.
+* Render task: animations solid, rainbow, plasma, breathe, fire, gradient, color fade, twinkle,
+  meteor, ripple, matrix rain, noise, spectrum; crossfade between animations; brightness with
+  fade, gamma, power limit with an adjustable model, the LED supply switched with a settle time;
+  stored and restored.
+* Each animation turns by 0, 90, 180 or 270 degrees; all but solid react to sound with their own
+  switch, strength, attack and release.
+* Text and clock overlay over every animation (5 x 7 font with umlauts, scrolling).
+* At power on: as before, off or on.
+* Web: LEDs page (live preview, on, brightness, animation, color, speed, rotation, sound
+  settings, overlay, status, sound input, power and timing) and Layout.
+* MQTT with Home Assistant discovery: light with the animations as effects, speed, rotation,
+  reacts to sound, sound strength, attack and release, overlay and its text, power on, power,
+  motion, motion auto off, restart.
+* Motion auto off: LEDs off N minutes after the sensor clears, back on with the next motion (also
+  after a restart).
 * I2S microphone (INMP441) on the ESP32: 32 bands, loudness and beat with an automatic gain;
-  animation "Spectrum" (a rainbow bar per band); console `audio`.
+  settings for gain, automatic gain, silence level, range and beat threshold with a live view
+  of the bands; animation "Spectrum" (a rainbow bar per band, only listed with a sound source);
+  console `audio`.
+* UDP sound inputs: WARLS spectrum packets and WLED audio sync (multicast); `tools/audio_send.py`
+  sends a demo or the PC's sound.
+* The LED supply goes off in the panic handler.
 * Optional hardware started from the board's pins: LED power switch (relay or MOSFET, off at
   boot), motion sensor, light sensor (BH1750 or LDR), microphone.
 * Serial console for development.
 
 Planned ([docs/leds.md](docs/leds.md)):
 
-* Parallel LED output on the S3 (LCD_CAM) and the C6 (PARLIO); 1024 LEDs per lane on the ESP32.
+* Parallel LED output on the S3 (LCD_CAM) and the C6 (PARLIO).
 * Custom shapes compiled in.
-* More animations with a reactive switch, palettes, crossfade, presets and playlists.
-* Audio: reactive animations, audio settings in the web UI and Home Assistant, UDP spectrum
-  (WARLS, WLED audio sync).
+* Palettes, presets and playlists.
 * Realtime input: DDP, E1.31, Art-Net.
-* Live preview, text and clock overlay.
 * Buttons, rotary encoder, temperature protection, power limit, gamma.
 
 ## Supported hardware

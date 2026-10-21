@@ -4,8 +4,10 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <iterator>
 
 #include "esp_app_desc.h"
+#include "px/audio/audio.hpp"
 #include "px/board/board.hpp"
 #include "px/config/backup.hpp"
 #include "px/effects/effects.hpp"
@@ -198,6 +200,8 @@ constexpr std::string_view kCorners[] = {"tl", "tr", "bl", "br"};
 constexpr std::string_view kRuns[] = {"rows", "columns"};
 constexpr std::string_view kDrivers[] = {"rmt", "parallel"};
 constexpr std::string_view kOrders[] = {"grb", "rgb", "brg", "rbg", "gbr", "bgr"};
+constexpr std::string_view kPowerOn[] = {"restore", "off", "on"};
+constexpr std::string_view kOverlayModes[] = {"off", "text", "clock"};
 
 void write_leds(backup::Writer &out)
 {
@@ -222,8 +226,19 @@ void write_leds(backup::Writer &out)
     out.number("fps", c.fps);
     out.number("fade_ms", c.fade_ms);
     out.number("settle_ms", c.settle_ms);
+    out.number("crossfade_ms", c.crossfade_ms);
+    out.text("power_on", kPowerOn[static_cast<size_t>(c.power_on) % std::size(kPowerOn)]);
     out.text("driver", kDrivers[c.driver == px::output::Driver::Parallel ? 1 : 0]);
     out.boolean("dither", c.dither);
+    const px::leds::Overlay o = px::leds::overlay();
+    out.open("overlay");
+    out.text("mode", kOverlayModes[static_cast<size_t>(o.mode) % std::size(kOverlayModes)], 2);
+    out.text("text", o.text, 2);
+    char overlay_color[8];
+    std::snprintf(overlay_color, sizeof(overlay_color), "#%02x%02x%02x", o.color.r, o.color.g, o.color.b);
+    out.text("color", overlay_color, 2);
+    out.number("speed", o.speed, 2);
+    out.boolean("clock_24h", o.clock_24h, 2);
     out.number("width", l.width);
     out.number("height", l.height);
     const px::leds::Lanes lanes = px::leds::lanes();
@@ -239,6 +254,27 @@ void write_leds(backup::Writer &out)
         out.number("green", ls.green, 3);
         out.number("blue", ls.blue, 3);
         out.boolean("dither", ls.dither, 3);
+    }
+    // each animation's rotation and sound switch, the ones not at the default
+    const px::leds::Styles styles = px::leds::styles();
+    bool opened = false;
+    for (size_t i = 0; i < px::effects::count() && i < px::leds::kMaxEffects; i++) {
+        const px::leds::Style &st = styles.style[i];
+        const px::leds::Style standard{};
+        if (st.rotation == 0 && !st.reactive && st.strength == standard.strength && st.attack_ms == standard.attack_ms &&
+            st.release_ms == standard.release_ms) {
+            continue;
+        }
+        if (!opened) {
+            out.open("animations");
+            opened = true;
+        }
+        out.item("animation", px::effects::info(i)->slug);
+        out.number("rotation", st.rotation * 90, 3);
+        out.boolean("reactive", st.reactive, 3);
+        out.number("strength", st.strength, 3);
+        out.number("attack_ms", st.attack_ms, 3);
+        out.number("release_ms", st.release_ms, 3);
     }
     out.open("panels");
     for (size_t i = 0; i < l.panel_count; i++) {
@@ -304,7 +340,32 @@ void read_leds(const Node &value, bool apply, backup::Report &report)
     fields.number("fps", 1, 200, config.fps);
     fields.number("fade_ms", 0, 10000, config.fade_ms);
     fields.number("settle_ms", 0, 2000, config.settle_ms);
+    fields.number("crossfade_ms", 0, leds::kMaxCrossfadeMs, config.crossfade_ms);
+    size_t power_on = static_cast<size_t>(config.power_on);
+    if (fields.choice("power_on", kPowerOn, power_on)) {
+        config.power_on = static_cast<leds::PowerOn>(power_on);
+    }
     fields.boolean("dither", config.dither);
+    leds::Overlay overlay = leds::overlay();
+    const Node *overlay_node = fields.node("overlay");
+    if (overlay_node != nullptr) {
+        backup::Fields of(*overlay_node, fields.path("overlay"), report);
+        size_t mode = static_cast<size_t>(overlay.mode);
+        if (of.choice("mode", kOverlayModes, mode)) {
+            overlay.mode = static_cast<leds::OverlayMode>(mode);
+        }
+        String text(overlay.text);
+        if (of.text("text", leds::kOverlayTextSize - 1, text)) {
+            std::snprintf(overlay.text, sizeof(overlay.text), "%s", text.c_str());
+        }
+        String overlay_color;
+        if (of.text("color", 7, overlay_color) && !parse_color(overlay_color, overlay.color)) {
+            of.problem("color", "#rrggbb");
+        }
+        of.number("speed", 0, 255, overlay.speed);
+        of.boolean("clock_24h", overlay.clock_24h);
+        of.finish();
+    }
     size_t driver = config.driver == px::output::Driver::Parallel ? 1 : 0;
     if (fields.choice("driver", kDrivers, driver)) {
         config.driver = driver == 1 ? px::output::Driver::Parallel : px::output::Driver::Rmt;
@@ -334,6 +395,35 @@ void read_leds(const Node &value, bool apply, backup::Report &report)
             lf.number("blue", 0, 255, ls.blue);
             lf.boolean("dither", ls.dither);
             lf.finish();
+        }
+    }
+    leds::Styles styles = leds::styles();
+    const Node *style_list = fields.node("animations");
+    if (style_list != nullptr && style_list->kind != Kind::List) {
+        fields.problem("animations", "a list of animations expected (- animation: fire ...)");
+    } else if (style_list != nullptr) {
+        // the list is complete: an animation that is not in it gets the default
+        styles = {};
+        for (const Node &item : style_list->list) {
+            backup::Fields af(item, fields.path("animations"), report);
+            String slug;
+            const size_t index = af.text("animation", 32, slug) ? px::effects::find(slug.c_str()) : px::effects::count();
+            if (index >= px::effects::count() || index >= leds::kMaxEffects) {
+                af.problem("animation", "not an animation of this firmware");
+                af.finish();
+                continue;
+            }
+            long degrees = 0;
+            af.number("rotation", 0, 270, degrees);
+            if (degrees % 90 != 0) {
+                af.problem("rotation", "0, 90, 180 or 270");
+            }
+            styles.style[index].rotation = static_cast<uint8_t>(degrees / 90);
+            af.boolean("reactive", styles.style[index].reactive);
+            af.number("strength", 0, 255, styles.style[index].strength);
+            af.number("attack_ms", 0, px::effects::kMaxAttackMs, styles.style[index].attack_ms);
+            af.number("release_ms", 0, px::effects::kMaxReleaseMs, styles.style[index].release_ms);
+            af.finish();
         }
     }
     const Node *list = fields.node("panels");
@@ -394,6 +484,14 @@ void read_leds(const Node &value, bool apply, backup::Report &report)
         if (lane_list != nullptr) {
             leds::set_lanes(lanes);
         }
+        if (overlay_node != nullptr) {
+            leds::set_overlay(overlay);
+        }
+        if (style_list != nullptr) {
+            for (size_t i = 0; i < px::effects::count() && i < leds::kMaxEffects; i++) {
+                leds::set_style(i, styles.style[i]);
+            }
+        }
         if (has_auto_off || has_minutes) {
             leds::set_auto_off(auto_off);
         }
@@ -402,6 +500,55 @@ void read_leds(const Node &value, bool apply, backup::Report &report)
         leds::set_speed(state.speed);
         leds::set_brightness(state.brightness);
         leds::set_on(state.on);
+    }
+}
+
+// ------------------------------------------------------------------------------------ audio
+
+// The audio input (docs/leds.md section 6.1): the microphone's settings and the UDP inputs
+void write_audio(backup::Writer &out)
+{
+    if (!px::audio::running()) {
+        return;
+    }
+    const px::audio::Settings c = px::audio::settings();
+    const px::audio::Inputs in = px::audio::inputs();
+    out.section("audio");
+    out.boolean("warls", in.warls);
+    out.number("warls_port", in.warls_port);
+    out.boolean("wled_sync", in.wled_sync);
+    out.number("gain_db", c.gain_db);
+    out.boolean("agc", c.agc);
+    out.number("silence_db", c.silence_db);
+    out.number("range_db", c.range_db);
+    out.number("beat_ratio_tenths", c.beat_ratio_tenths);
+}
+
+void read_audio(const Node &value, bool apply, backup::Report &report)
+{
+    namespace audio = px::audio;
+    const size_t problems = report.problems.size();
+    audio::Settings c = audio::settings();
+    audio::Inputs in = audio::inputs();
+    backup::Fields fields(value, "audio", report);
+    const bool has_warls = fields.boolean("warls", in.warls);
+    const bool has_port = fields.number("warls_port", 1, 65535, in.warls_port);
+    const bool has_sync = fields.boolean("wled_sync", in.wled_sync);
+    fields.number("gain_db", audio::kMinGainDb, audio::kMaxGainDb, c.gain_db);
+    fields.boolean("agc", c.agc);
+    fields.number("silence_db", audio::kMinSilenceDb, audio::kMaxSilenceDb, c.silence_db);
+    fields.number("range_db", audio::kMinRangeDb, audio::kMaxRangeDb, c.range_db);
+    fields.number("beat_ratio_tenths", audio::kMinBeatTenths, audio::kMaxBeatTenths, c.beat_ratio_tenths);
+    fields.finish();
+    if (report.problems.size() != problems || !apply) {
+        return;
+    }
+    char error[64] = {};
+    if (!audio::set_settings(c, error, sizeof(error))) {
+        report.problem("audio", error);
+    }
+    if (has_warls || has_port || has_sync) {
+        audio::set_inputs(in);
     }
 }
 
@@ -461,6 +608,7 @@ void read_mqtt(const Node &value, bool apply, backup::Report &report)
 const backup::Section kSections[] = {
     {"network", write_network, read_network},
     {"leds", write_leds, read_leds},
+    {"audio", write_audio, read_audio},
     {"mqtt", write_mqtt, read_mqtt},
     {"webui", write_webui, read_webui},
 };

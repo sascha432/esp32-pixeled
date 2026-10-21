@@ -295,8 +295,8 @@ esp_err_t post_format(httpd_req_t *req)
 void register_file_routes(httpd_handle_t server)
 {
     const httpd_uri_t routes[] = {
-        {.uri = "/api/fs/files.zip", .method = HTTP_GET, .handler = get_files_zip, .user_ctx = nullptr},
-        {.uri = "/api/fs/format", .method = HTTP_POST, .handler = post_format, .user_ctx = nullptr},
+        route("/api/fs/files.zip", HTTP_GET, get_files_zip),
+        route("/api/fs/format", HTTP_POST, post_format),
     };
     for (const auto &route : routes) {
         httpd_register_uri_handler(server, &route);

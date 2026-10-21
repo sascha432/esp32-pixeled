@@ -432,8 +432,18 @@ int cmd_light(int argc, char **argv)
 // The LED outputs before the render task exists (docs/leds.md section 2): the lanes of the board
 // with a pixel count each, a frame held here, single pixels or all of them set and sent at once.
 // For bring-up and for finding how a panel is wired.
-std::unique_ptr<uint8_t[]> g_frame;
-std::unique_ptr<uint8_t[]> g_limited;
+// from malloc: new aborts when the heap is full (no exceptions), the frame of a large test may not
+// fit
+struct FreeDeleter {
+    void operator()(uint8_t *pointer) const
+    {
+        std::free(pointer);
+    }
+};
+std::unique_ptr<uint8_t[], FreeDeleter> g_frame;
+std::unique_ptr<uint8_t[], FreeDeleter> g_limited;
+// the frame send_frame() showed last, g_frame or g_limited; nullptr while it could not be scaled
+const uint8_t *g_send = nullptr;
 size_t g_frame_size = 0;
 uint32_t g_frame_mw = 0;
 
@@ -453,23 +463,30 @@ int send_frame()
     }
     const uint32_t idle = static_cast<uint32_t>(pixels) * kIdleMw;
     const auto colors = static_cast<uint32_t>(sum * kChannelMw / 255);
-    const uint8_t *frame = g_frame.get();
+    g_send = g_frame.get();
     g_frame_mw = idle + colors;
-    if (g_frame_mw > kLimitMw) {
+    // a black frame is sent as it is: above the limit it is the idle power of many LEDs alone,
+    // which no scale lowers
+    if (g_frame_mw > kLimitMw && colors > 0) {
+        g_send = nullptr;
         // what is left above the idle power, as a scale in 1/65536
         const uint32_t room = kLimitMw > idle ? kLimitMw - idle : 0;
         const auto scale = static_cast<uint32_t>(static_cast<uint64_t>(room) * 65536 / colors);
         if (!g_limited) {
-            g_limited.reset(new uint8_t[g_frame_size]);
+            g_limited.reset(static_cast<uint8_t *>(std::malloc(g_frame_size)));
+            if (!g_limited) {
+                std::printf("no memory for the scaled frame (%u bytes)\n", static_cast<unsigned>(g_frame_size));
+                return 1;
+            }
         }
         for (size_t i = 0; i < g_frame_size; i++) {
             g_limited[i] = static_cast<uint8_t>((g_frame[i] * scale) >> 16);
         }
-        frame = g_limited.get();
+        g_send = g_limited.get();
         std::printf("limited: %lu mW asked, scaled to %lu mW\n", static_cast<unsigned long>(g_frame_mw),
                     static_cast<unsigned long>(idle + static_cast<uint32_t>(static_cast<uint64_t>(colors) * scale >> 16)));
     }
-    return check(px::output::show(frame, g_frame_size));
+    return check(px::output::show(g_send, g_frame_size));
 }
 
 // sends the frame `count` times back to back: what the output reaches without rendering
@@ -479,9 +496,16 @@ int bench_frames(int count)
         std::printf("no lanes: leds setup or leds layout first\n");
         return 1;
     }
+    // the frame as shown, scaled to the limit: the unscaled one sent full white to the test matrix
+    // (2026-10-21, far above its 10 W, the board browned out)
+    if (g_send == nullptr) {
+        std::printf("the frame is above the power limit and was not scaled: leds fill first\n");
+        return 1;
+    }
+    const uint8_t *frame = g_send;
     const int64_t start = esp_timer_get_time();
     for (int i = 0; i < count; i++) {
-        if (px::output::show(g_frame.get(), g_frame_size) != ESP_OK) {
+        if (px::output::show(frame, g_frame_size) != ESP_OK) {
             std::printf("frame %d failed\n", i);
             return 1;
         }
@@ -490,6 +514,22 @@ int bench_frames(int count)
     std::printf("%d frames of %u LEDs in %lld ms: %.1f fps, %lld us per frame\n", count,
                 static_cast<unsigned>(g_frame_size / 3), us / 1000, static_cast<double>(count) * 1e6 / static_cast<double>(us),
                 us / count);
+    if (px::output::driver() == px::output::Driver::Parallel) {
+        std::printf("encoder: longest interrupt of the last frame %lu us\n",
+                    static_cast<unsigned long>(px::output::encoder_max_us()));
+    }
+    return 0;
+}
+
+// the parallel encoder alone on the slowest data (every bit set), nothing sent
+int bench_encoder()
+{
+    const auto us = px::output::encoder_test();
+    if (!us) {
+        return check(us.error());
+    }
+    std::printf("encoder, every bit set on %u lanes: longest buffer %lu us (a buffer is sent in 720 us)\n",
+                static_cast<unsigned>(px::output::lane_count()), static_cast<unsigned long>(*us));
     return 0;
 }
 
@@ -511,9 +551,18 @@ int setup_leds(const int *counts, size_t count)
     if (check(out::start(lanes, count, px::leds::config().driver)) != 0) {
         return 1;
     }
-    g_frame_size = total * 3;
-    g_frame.reset(new uint8_t[g_frame_size]());
+    // the old frames first: 8 x 2048 LEDs (48 KB) nearly fill the largest free block of an ESP32
+    // without PSRAM
+    g_send = nullptr;
+    g_frame.reset();
     g_limited.reset();
+    g_frame_size = total * 3;
+    g_frame.reset(static_cast<uint8_t *>(std::calloc(g_frame_size, 1)));
+    if (!g_frame) {
+        std::printf("no memory for a frame of %u bytes\n", static_cast<unsigned>(g_frame_size));
+        g_frame_size = 0;
+        return 1;
+    }
     return send_frame();
 }
 
@@ -538,13 +587,18 @@ bool parse_corner(const char *text, px::layout::Corner &out)
     return false;
 }
 
+constexpr const char *kPowerOn[] = {"restore", "off", "on"};
+
 void print_leds_status()
 {
     const px::leds::Status s = px::leds::status();
     const px::effects::Info *effect = px::effects::info(s.state.effect);
-    std::printf("%s, brightness %u (now %u), %s, color %u,%u,%u, speed %u\n", s.state.on ? "on" : "off",
-                s.state.brightness, s.level, effect != nullptr ? effect->slug : "?", s.state.color.r, s.state.color.g,
-                s.state.color.b, s.state.speed);
+    std::printf("%s, brightness %u (now %u), %s, color %u,%u,%u, speed %u, rotation %u%s (strength %u, attack %u ms, "
+                "release %u ms)%s\n",
+                s.state.on ? "on" : "off", s.state.brightness, s.level, effect != nullptr ? effect->slug : "?",
+                s.state.color.r, s.state.color.g, s.state.color.b, s.state.speed, s.style.rotation * 90u,
+                s.style.reactive ? ", reacts to sound" : "", s.style.strength, s.style.attack_ms, s.style.release_ms,
+                s.has_audio ? (s.hears_audio ? " (hears sound)" : " (silence)") : "");
     std::printf("canvas %ux%u, %lu LEDs on %u lanes (%s), supply %s, %u fps, %lu mW%s%s%s\n", s.width, s.height,
                 static_cast<unsigned long>(s.leds), s.lanes,
                 px::leds::config().driver == px::output::Driver::Parallel ? "parallel" : "RMT", s.supply_on ? "on" : "off",
@@ -561,9 +615,27 @@ void print_leds_status()
         }
     }
     const px::leds::Config c = px::leds::config();
-    std::printf("frame: animation %lu us, compose %lu us, output %lu us; target %u fps, dither %s\n",
+    std::printf("frame: animation %lu us, compose %lu us, output %lu us; target %u fps, dither %s, crossfade %u ms, "
+                "power on: %s\n",
                 static_cast<unsigned long>(s.render_us), static_cast<unsigned long>(s.compose_us),
-                static_cast<unsigned long>(s.send_us), c.fps, c.dither ? "on" : "off");
+                static_cast<unsigned long>(s.send_us), c.fps, c.dither ? "on" : "off", c.crossfade_ms,
+                kPowerOn[static_cast<size_t>(c.power_on) % std::size(kPowerOn)]);
+    const px::leds::Overlay o = px::leds::overlay();
+    if (o.mode != px::leds::OverlayMode::Off) {
+        std::printf("overlay: %s \"%s\", color %u,%u,%u, speed %u\n", o.mode == px::leds::OverlayMode::Text ? "text" : "clock",
+                    o.text, o.color.r, o.color.g, o.color.b, o.speed);
+    }
+}
+
+// the config with one change; the problem printed
+int change_config(px::leds::Config config)
+{
+    char error[64] = {};
+    if (!px::leds::set_config(config, error, sizeof(error))) {
+        std::printf("%s\n", error);
+        return 1;
+    }
+    return 0;
 }
 
 int cmd_render(int argc, char **argv)
@@ -631,6 +703,39 @@ int cmd_render(int argc, char **argv)
             return argc == 3 ? 1 : 0;
         }
         leds::set_effect(index);
+        return 0;
+    }
+    if (std::strcmp(sub, "rotate") == 0 || std::strcmp(sub, "reactive") == 0 || std::strcmp(sub, "strength") == 0 ||
+        std::strcmp(sub, "attack") == 0 || std::strcmp(sub, "release") == 0) {
+        const size_t effect = leds::status().state.effect;
+        leds::Style style = leds::styles().style[effect < leds::kMaxEffects ? effect : 0];
+        if (sub[0] == 'a' || sub[2] == 'l') {
+            const bool attack = sub[0] == 'a';
+            const int ms = argc == 3 ? std::atoi(argv[2]) : -1;
+            if (ms < 0 || ms > (attack ? px::effects::kMaxAttackMs : px::effects::kMaxReleaseMs)) {
+                return usage(attack ? "leds attack <0-2000 ms>   (the current animation; 20 as built)"
+                                    : "leds release <0-5000 ms>   (the current animation; 250 as built)");
+            }
+            (attack ? style.attack_ms : style.release_ms) = static_cast<uint16_t>(ms);
+        } else if (sub[0] == 's') {
+            const int strength = argc == 3 ? std::atoi(argv[2]) : -1;
+            if (strength < 0 || strength > 255) {
+                return usage("leds strength <0-255>   (the current animation; 128 as built)");
+            }
+            style.strength = static_cast<uint8_t>(strength);
+        } else if (sub[1] == 'o') {
+            const int degrees = argc == 3 ? std::atoi(argv[2]) : -1;
+            if (degrees < 0 || degrees > 270 || degrees % 90 != 0) {
+                return usage("leds rotate 0|90|180|270   (the current animation)");
+            }
+            style.rotation = static_cast<uint8_t>(degrees / 90);
+        } else {
+            if (argc != 3 || (std::strcmp(argv[2], "on") != 0 && std::strcmp(argv[2], "off") != 0)) {
+                return usage("leds reactive on|off   (the current animation)");
+            }
+            style.reactive = std::strcmp(argv[2], "on") == 0;
+        }
+        leds::set_style(effect, style);
         return 0;
     }
     if (std::strcmp(sub, "driver") == 0 && argc == 3) {
@@ -708,11 +813,49 @@ int cmd_render(int argc, char **argv)
     if (std::strcmp(sub, "fps") == 0 && argc == 3) {
         leds::Config config = leds::config();
         config.fps = static_cast<uint8_t>(std::atoi(argv[2]));
-        char error[64] = {};
-        if (!leds::set_config(config, error, sizeof(error))) {
-            std::printf("%s\n", error);
-            return 1;
+        return change_config(config);
+    }
+    if (std::strcmp(sub, "crossfade") == 0 && argc == 3) {
+        leds::Config config = leds::config();
+        config.crossfade_ms = static_cast<uint16_t>(std::atoi(argv[2]));
+        return change_config(config);
+    }
+    if (std::strcmp(sub, "poweron") == 0) {
+        size_t mode = 0;
+        while (argc == 3 && mode < std::size(kPowerOn) && std::strcmp(argv[2], kPowerOn[mode]) != 0) {
+            mode++;
         }
+        if (argc != 3 || mode == std::size(kPowerOn)) {
+            return usage("leds poweron restore|off|on   (at the start: as before, off or on)");
+        }
+        leds::Config config = leds::config();
+        config.power_on = static_cast<leds::PowerOn>(mode);
+        return change_config(config);
+    }
+    if (std::strcmp(sub, "overlay") == 0) {
+        leds::Overlay o = leds::overlay();
+        if (argc >= 3 && std::strcmp(argv[2], "off") == 0) {
+            o.mode = leds::OverlayMode::Off;
+        } else if (argc >= 3 && std::strcmp(argv[2], "clock") == 0) {
+            o.mode = leds::OverlayMode::Clock;
+            o.clock_24h = argc < 4 || std::strcmp(argv[3], "12") != 0;
+        } else if (argc >= 4 && std::strcmp(argv[2], "text") == 0) {
+            // the words after "text" with single spaces
+            o.mode = leds::OverlayMode::Text;
+            o.text[0] = 0;
+            for (int i = 3; i < argc; i++) {
+                const size_t used = std::strlen(o.text);
+                std::snprintf(o.text + used, sizeof(o.text) - used, "%s%s", i > 3 ? " " : "", argv[i]);
+            }
+        } else if (argc == 6 && std::strcmp(argv[2], "color") == 0) {
+            o.color = {static_cast<uint8_t>(std::atoi(argv[3])), static_cast<uint8_t>(std::atoi(argv[4])),
+                       static_cast<uint8_t>(std::atoi(argv[5]))};
+        } else if (argc == 4 && std::strcmp(argv[2], "speed") == 0) {
+            o.speed = static_cast<uint8_t>(std::atoi(argv[3]));
+        } else {
+            return usage("leds overlay off | clock [24|12] | text <words> | color <r> <g> <b> | speed <0-255>");
+        }
+        leds::set_overlay(o);
         return 0;
     }
     if (std::strcmp(sub, "dither") == 0 && argc == 3) {
@@ -736,6 +879,7 @@ int cmd_render(int argc, char **argv)
         return 0;
     }
     if (std::strcmp(sub, "resume") == 0) {
+        g_send = nullptr;
         g_frame.reset();
         g_limited.reset();
         g_frame_size = 0;
@@ -773,15 +917,20 @@ int cmd_leds(int argc, char **argv)
         px::leds::suspend(true);
     } else if (std::strcmp(sub, "lanes") != 0) {
         return usage("leds [status] | on | off | bright <0-255> | effect [<name>] | color <r> <g> <b> | speed <0-255> |"
-                     " autooff on|off|<min> | fps <n> | dither on|off | driver rmt|parallel | limit <mW> |"
+                     " rotate 0|90|180|270 | reactive on|off | strength <0-255> | attack <ms> | release <ms> | autooff on|off|<min> |"
+                     " fps <n> | crossfade <ms> | poweron restore|off|on | overlay ... | dither on|off | driver rmt|parallel | limit <mW> |"
                      " lane [<n> ...] | canvas | panel | layout -- output tests (suspend the LEDs until `leds resume`):"
                      " setup | fill | px | bench | lanes | stop");
+    }
+    if (std::strcmp(sub, "bench") == 0 && argc > 2 && std::strcmp(argv[2], "encode") == 0) {
+        return bench_encoder();
     }
     if (std::strcmp(sub, "bench") == 0) {
         return bench_frames(argc > 2 ? std::atoi(argv[2]) : 200);
     }
     if (std::strcmp(sub, "stop") == 0) {
         out::stop();
+        g_send = nullptr;
         g_frame.reset();
         g_limited.reset();
         g_frame_size = 0;
@@ -864,7 +1013,7 @@ int cmd_leds(int argc, char **argv)
     return usage("leds [status] | on | off | bright <0-255> | effect [<name>] | color <r> <g> <b> | speed <0-255> |"
                  " limit <mW> | canvas <w> <h> | panel <lane> <x> <y> <w> <h> tl|tr|bl|br rows|columns [zigzag|straight] |"
                  " layout   -- output tests (suspend the LEDs until `leds resume`): setup <count lane 1> ... | fill <r> <g> <b> |"
-                 " px <lane> <from>[-<to>] <r> <g> <b> | <count> <r> <g> <b> [lane] | bench [frames] | lanes | stop");
+                 " px <lane> <from>[-<to>] <r> <g> <b> | <count> <r> <g> <b> [lane] | bench [frames|encode] | lanes | stop");
 }
 
 // The relays: their state, or one switched by hand
@@ -918,6 +1067,12 @@ void print_audio()
         bars[b] = static_cast<char>('0' + s.audio.bands[b] * 9 / 255);
     }
     bars[px::effects::kBands] = '\0';
+    if (s.source == px::audio::Source::Warls || s.source == px::audio::Source::WledSync) {
+        std::printf("%s %-5s %lu packets, loudness %3u%s |%s|\n", s.audio.active ? "sound  " : "silence",
+                    px::audio::source_name(s.source), static_cast<unsigned long>(s.packets), s.audio.loudness,
+                    s.audio.beat ? " BEAT" : "     ", bars);
+        return;
+    }
     std::printf("%s slot %c, loudest %6.1f dB, gain %6.1f dB, loudness %3u%s |%s|\n",
                 s.audio.active ? "sound  " : "silence", s.slot, static_cast<double>(s.loudest_db),
                 static_cast<double>(s.reference_db), s.audio.loudness, s.audio.beat ? " BEAT" : "     ", bars);
@@ -926,11 +1081,62 @@ void print_audio()
 int cmd_audio(int argc, char **argv)
 {
     if (!px::audio::running()) {
-        std::printf("no microphone\n");
+        std::printf("no audio input\n");
         return 1;
     }
     if (argc == 1 || std::strcmp(argv[1], "status") == 0) {
+        const px::audio::Settings c = px::audio::settings();
+        const px::audio::Inputs in = px::audio::inputs();
+        std::printf("microphone %s; gain %d dB, automatic gain %s, silence below %d dB, range %u dB, beat at %u.%u x the "
+                    "bass\n",
+                    px::audio::has_microphone() ? "on" : "none", c.gain_db, c.agc ? "on" : "off", c.silence_db, c.range_db,
+                    c.beat_ratio_tenths / 10u, c.beat_ratio_tenths % 10u);
+        std::printf("WARLS %s (port %u), WLED audio sync %s; now from: %s\n", in.warls ? "on" : "off", in.warls_port,
+                    in.wled_sync ? "on" : "off", px::audio::status().source == px::audio::Source::None
+                                                     ? "nothing"
+                                                     : px::audio::source_name(px::audio::status().source));
         print_audio();
+        return 0;
+    }
+    if (std::strcmp(argv[1], "set") == 0 && argc == 4) {
+        px::audio::Settings c = px::audio::settings();
+        const char *key = argv[2];
+        const int value = std::atoi(argv[3]);
+        px::audio::Inputs in = px::audio::inputs();
+        if (std::strcmp(key, "warls") == 0 || std::strcmp(key, "wled") == 0) {
+            (key[1] == 'a' ? in.warls : in.wled_sync) = std::strcmp(argv[3], "on") == 0;
+            px::audio::set_inputs(in);
+            return 0;
+        }
+        if (std::strcmp(key, "port") == 0) {
+            if (value < 1 || value > 65535) {
+                return usage("audio set port <1-65535>   (WARLS; 21324 as built)");
+            }
+            in.warls_port = static_cast<uint16_t>(value);
+            px::audio::set_inputs(in);
+            return 0;
+        }
+        if (std::strcmp(key, "gain") == 0) {
+            c.gain_db = static_cast<int8_t>(value);
+        } else if (std::strcmp(key, "agc") == 0) {
+            c.agc = std::strcmp(argv[3], "on") == 0;
+        } else if (std::strcmp(key, "silence") == 0) {
+            c.silence_db = static_cast<int8_t>(value);
+        } else if (std::strcmp(key, "range") == 0) {
+            c.range_db = static_cast<uint8_t>(value);
+        } else if (std::strcmp(key, "beat") == 0) {
+            // 1.6 or 16: tenths either way
+            const double ratio = std::atof(argv[3]);
+            c.beat_ratio_tenths = static_cast<uint8_t>(ratio < 10.0 ? ratio * 10.0 + 0.5 : ratio);
+        } else {
+            return usage("audio set gain <dB>|agc on|off|silence <dB>|range <dB>|beat <ratio>|warls on|off|port <n>|"
+                         "wled on|off");
+        }
+        char error[64] = {};
+        if (!px::audio::set_settings(c, error, sizeof(error))) {
+            std::printf("%s\n", error);
+            return 1;
+        }
         return 0;
     }
     if (std::strcmp(argv[1], "watch") == 0) {
@@ -942,7 +1148,21 @@ int cmd_audio(int argc, char **argv)
         }
         return 0;
     }
-    return usage("audio [status|watch [seconds]]");
+    return usage("audio [status|watch [seconds]|set gain <dB>|agc on|off|silence <dB>|range <dB>|beat <ratio>|"
+                 "warls on|off|port <n>|wled on|off]");
+}
+
+// A deliberate crash: tries the panic handler (the LED supply off) and the count of crashes in a
+// row (docs/leds.md section 5)
+int cmd_crash(int argc, char **argv)
+{
+    if (argc != 2 || std::strcmp(argv[1], "yes") != 0) {
+        return usage("crash yes   (aborts: the panic handler runs, the device restarts)");
+    }
+    std::printf("crashing\n");
+    std::fflush(stdout);
+    vTaskDelay(pdMS_TO_TICKS(50));
+    std::abort();
 }
 
 int cmd_factory_reset(int argc, char **argv)
@@ -1036,12 +1256,14 @@ void register_commands()
     add("login-reset", "remove the web UI login", "yes", cmd_login_reset);
     add("log", "log output on the serial port: toggle, or set a level", "[off|errors|warnings|on|debug]", cmd_log);
     add("factory-reset", "erase every setting and restart", "yes", cmd_factory_reset);
+    add("crash", "crash on purpose: tries the panic handler (LED supply off) and the crash count", "yes", cmd_crash);
     add("light", "light sensor: values, calibration while adding a board", "[calibrate <lux>|reset|watch [s]|points]",
         cmd_light);
-    add("leds", "the LEDs: state, layout, and output tests", "[status] | on | off | bright <n> | effect [<name>] | color <r> <g> <b> | speed <n> | limit <mW> | driver rmt|parallel | dither on|off | fps <n> | autooff on|off|<min> | lane [<n> ...] | canvas <w> <h> | panel ... | layout | setup <counts...> | fill | px | bench [n] | lanes | resume", cmd_leds);
+    add("leds", "the LEDs: state, layout, and output tests", "[status] | on | off | bright <n> | effect [<name>] | color <r> <g> <b> | speed <n> | rotate <deg> | reactive on|off | strength <n> | attack <ms> | release <ms> | crossfade <ms> | poweron restore|off|on | overlay off|clock|text ... | limit <mW> | driver rmt|parallel | dither on|off | fps <n> | autooff on|off|<min> | lane [<n> ...] | canvas <w> <h> | panel ... | layout | setup <counts...> | fill | px | bench [n|encode] | lanes | resume", cmd_leds);
     add("relay", "the LED power switch: the state, or switched", "[status|<n> on|off]", cmd_relay);
     add("motion", "motion sensor: the state", "[status]", cmd_motion);
-    add("audio", "microphone: the analysis", "[status|watch [s]]", cmd_audio);
+    add("audio", "microphone: the analysis and its settings",
+        "[status|watch [s]|set gain|agc|silence|range|beat|warls|port|wled <value>]", cmd_audio);
 }
 
 // The console's own task: created at the start, so its stack is taken while the internal RAM is

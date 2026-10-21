@@ -18,9 +18,8 @@ constexpr float kFullScale = static_cast<float>(kFftSize) / 4.0f;
 constexpr float kReleaseDb = 0.07f;
 // the bars fall this share of their height per block
 constexpr float kFall = 0.12f;
-// the bass bands of the beat, and how much louder than its average a beat is
+// the bass bands of the beat
 constexpr size_t kBassBands = 4;
-constexpr float kBeatRatio = 1.6f;
 // at most one beat in this many blocks (140 ms)
 constexpr uint32_t kBeatBlocks = 6;
 
@@ -90,6 +89,15 @@ Analyzer::Analyzer()
     }
 }
 
+void Analyzer::configure(const Settings &settings)
+{
+    _gain_db = static_cast<float>(settings.gain_db);
+    _agc = settings.agc;
+    _silence_db = static_cast<float>(settings.silence_db);
+    _range_db = static_cast<float>(settings.range_db < 1 ? 1 : settings.range_db);
+    _beat_ratio = static_cast<float>(settings.beat_ratio_tenths) / 10.0f;
+}
+
 void Analyzer::process(const float *samples, effects::Audio &out)
 {
     // the loudness: the block's RMS, without the DC the microphone may have
@@ -105,7 +113,7 @@ void Analyzer::process(const float *samples, effects::Audio &out)
         _re[i] = s * _window[i];
         _im[i] = 0.0f;
     }
-    const float rms_db = 10.0f * std::log10(power / static_cast<float>(kFftSize) + 1e-12f) + 3.0f;
+    const float rms_db = 10.0f * std::log10(power / static_cast<float>(kFftSize) + 1e-12f) + 3.0f + _gain_db;
     fft(_re, _im, kFftSize);
 
     // each band: its loudest bin in dB; the bass energy for the beat
@@ -118,7 +126,7 @@ void Analyzer::process(const float *samples, effects::Audio &out)
             const float m = std::sqrt(_re[k] * _re[k] + _im[k] * _im[k]);
             magnitude = m > magnitude ? m : magnitude;
         }
-        band_db[b] = db(magnitude);
+        band_db[b] = db(magnitude) + _gain_db;
         loudest = band_db[b] > loudest ? band_db[b] : loudest;
         if (b < kBassBands) {
             bass += magnitude * magnitude;
@@ -126,21 +134,26 @@ void Analyzer::process(const float *samples, effects::Audio &out)
     }
     _loudest_db = loudest;
 
-    // the gain: up at once, down slowly, never below the silence
-    _reference_db = loudest > _reference_db ? loudest : _reference_db - kReleaseDb;
-    _reference_db = _reference_db < kSilenceDb ? kSilenceDb : _reference_db;
-    out.active = loudest > kSilenceDb;
-    const float bottom = _reference_db - kRangeDb;
+    // the automatic gain: up at once, down slowly, never below the silence; without it the range
+    // below full scale
+    if (_agc) {
+        _reference_db = loudest > _reference_db ? loudest : _reference_db - kReleaseDb;
+        _reference_db = _reference_db < _silence_db ? _silence_db : _reference_db;
+    } else {
+        _reference_db = 0.0f;
+    }
+    out.active = loudest > _silence_db;
+    const float bottom = _reference_db - _range_db;
     for (size_t b = 0; b < effects::kBands; b++) {
         // silence: the bars fall to 0
-        float value = out.active ? (band_db[b] - bottom) / kRangeDb : 0.0f;
+        float value = out.active ? (band_db[b] - bottom) / _range_db : 0.0f;
         value = value < 0.0f ? 0.0f : value > 1.0f ? 1.0f : value;
         // rise at once, fall slowly
         const float fallen = _shown[b] - kFall;
         _shown[b] = value > fallen ? value : fallen;
         out.bands[b] = static_cast<uint8_t>(_shown[b] * 255.0f + 0.5f);
     }
-    float loudness = out.active ? (rms_db - bottom) / kRangeDb : 0.0f;
+    float loudness = out.active ? (rms_db - bottom) / _range_db : 0.0f;
     loudness = loudness < 0.0f ? 0.0f : loudness > 1.0f ? 1.0f : loudness;
     out.loudness = static_cast<uint8_t>(loudness * 255.0f + 0.5f);
 
@@ -152,7 +165,7 @@ void Analyzer::process(const float *samples, effects::Audio &out)
         _bass_average = bass;
     }
     _since_beat++;
-    out.beat = out.active && _since_beat >= kBeatBlocks && bass > kBeatRatio * _bass_average && _bass_average > 0.0f;
+    out.beat = out.active && _since_beat >= kBeatBlocks && bass > _beat_ratio * _bass_average && _bass_average > 0.0f;
     if (out.beat) {
         _since_beat = 0;
     }

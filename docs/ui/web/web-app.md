@@ -12,7 +12,7 @@ Setup                     only while the device is not set up, no login
   Wi-Fi  ->  Web UI login  ->  Done
 Login
 Main pages                after login (the first one: LEDs)
-  LEDs                    on, brightness, animation, color, speed, status; motion auto off
+  LEDs                    on, brightness, animation, color, speed, rotation, sound, status; motion auto off
                           (with a sensor); power and timing
   Layout                  canvas size, panels (lane, place, size, first LED, runs, zigzag),
                           preview of the data path, "Show the edges"
@@ -113,16 +113,33 @@ stays on, open, for 15 minutes after the first connection, so there is no hurry
 
 ## 4. Main pages
 
-**LEDs.** The live controls send on change (a slider while it moves, at most every 150 ms): the
-switch, brightness 1 to 255, the animation, the color (only for an animation that uses one) and
-the speed. Below them the state (on with the frames per second, or off, or why nothing is shown),
+**LEDs.** At the top the card "Live": the canvas as drawn (before the brightness), a cell per
+LED, about 10 pictures a second over a WebSocket while the page is open (closed 3 s after leaving
+it; at most 4 viewers). The live controls send on change (a slider while it moves, at most every
+150 ms): the switch, brightness 1 to 255, the animation (an animation that needs sound, Spectrum,
+only with an audio source), the color (only for an animation that uses one) and the speed, then
+the rotation (0, 90, 180, 270 degrees) and "Reacts to sound" (only with an audio source and for
+an animation that can react) with the sliders "Strength" (0 to 255, 128 as built), "Attack"
+(0 to 2000 ms, 20 as built) and "Release" (0 to 5000 ms, 250 as built) below it while it is on
+(always for Spectrum); all of them belong to the current animation, each one keeps its own (a
+hint says so). The card "Overlay": show nothing, text or the clock, the color, the text (63
+bytes, scrolling when wider than the matrix) with its scroll speed, or 24 hours for the clock;
+Save. Below them the state (on with the frames per second, or off, or why
+nothing is shown), "Sound" (hears sound or silence, with an audio source),
 the estimated power with "limited" when the limit dims the frames, and the LEDs and lanes.
-Refreshed every 2 s. With a motion sensor the card "Motion": "Off when nobody moves" (a switch),
+Refreshed every 2 s. The card "Sound input": 32 bars of the bands (bass on the left, grey in
+silence), where the sound comes from (microphone, WARLS, WLED audio sync, nothing), the input
+(sound with a "beat" badge, or silence), the loudest band and the reference (microphone) or the
+packets (UDP) and the loudness, refreshed every 500 ms; a form with Save for the UDP inputs:
+WARLS (a switch and its port) and WLED audio sync (a switch); with a microphone a second form:
+gain (dB), automatic gain, silence below (dB), range (dB), beat threshold (times the bass), with
+a hint how they work together. With a motion sensor the card "Motion": "Off when nobody moves" (a switch),
 the minutes without motion (1 to 240, the sensor's hold: every motion starts them again; the hint
 says that only an auto off is undone by motion), and the state: the sensor (motion with the time
 it still holds, or clear) and the auto off ("off in 3 min without motion", "switched off by
 motion, on with the next motion"). The card "Power and timing" is a form with Save: the power limit in W (0:
-none), frames per second, fade time, supply settle time, the power model (one color of one LED
+none), frames per second, fade time, supply settle time, the crossfade between animations (ms,
+0: none), what the LEDs do at power on (as before, off, on), the power model (one color of one LED
 at full, one LED while dark, in mW), with the hint that the estimate can be compared with a meter
 at the supply, the output (RMT or parallel; disabled on a chip without the parallel output) and
 dithering. The status also has the times of the last frame (`render_us`, `compose_us`,
@@ -131,9 +148,21 @@ dithering. The status also has the times of the last frame (`render_us`, `compos
 Code: `components/leds`, `components/leds_api`, `web/leds.js`. API: `GET /api/leds` (state,
 status, the list of animations with `slug`, `name`, `color`, `reactive`, and `config`),
 `POST /api/leds` (any of `on`, `brightness`, `effect` (a slug), `color` (`#rrggbb`), `speed`,
-`auto_off` (`1`, `0`), `auto_off_minutes`; answers like GET; GET has `motion` with `sensor`,
-`detected`, `auto_off`, `minutes`, `off_in_s`, `off_by_motion`), `POST /api/leds/config` (`power_limit_mw`, `channel_mw`, `idle_mw`, `fps`,
-`fade_ms`, `settle_ms`, `driver` (`rmt`, `parallel`), `dither` (`1`, `0`)). The recovery app has none of them (404); its LED pages say so.
+`auto_off` (`1`, `0`), `auto_off_minutes`, `rotation` (`0`, `90`, `180`, `270`) and `reactive`
+(`1`, `0`), `strength` (0 to 255), `attack` (0 to 2000 ms) and `release` (0 to 5000 ms) for the
+animation given in the same request, else the current one; answers like GET; GET has `rotation`,
+`reactive`, `strength`, `attack`, `release`, `audio` with `source` (an audio source is set up)
+and `hears`, `motion` with `sensor`, `detected`, `auto_off`, `minutes`, `off_in_s`,
+`off_by_motion`, and `overlay` with `mode`, `text`, `color`, `speed`, `clock_24h`),
+`POST /api/leds/config` (`power_limit_mw`, `channel_mw`, `idle_mw`, `fps`, `fade_ms`,
+`settle_ms`, `crossfade_ms`, `power_on` (`restore`, `off`, `on`), `driver` (`rmt`, `parallel`),
+`dither` (`1`, `0`)), `POST /api/leds/overlay` (any of `mode` (`off`, `text`, `clock`), `text`,
+`color`, `speed`, `clock_24h`; answers like `GET /api/leds`), `GET /api/leds/live` (a WebSocket,
+login checked after the handshake: binary messages of 4 bytes width and height, 16 bits little
+endian each, then RGB row by row; 10 a second, 5 for a canvas over 4096 pixels).
+`GET /api/audio` (`running` and `microphone`, `source` (`""`, `microphone`, `warls`, `wled`),
+`packets`, the analysis, `settings`, `inputs` with `warls`, `warls_port`, `wled_sync`),
+`POST /api/audio` (the settings, `warls`, `warls_port`, `wled_sync`). The recovery app has none of them (404); its LED pages say so.
 
 **MQTT.** The card "Connection" (state, the problem in words, connected for, the topics in use;
 refreshed every 2 s) and the form "Broker": Connect (a switch), the address (`mqtt://host:1883`

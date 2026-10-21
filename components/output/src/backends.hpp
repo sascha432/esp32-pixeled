@@ -6,6 +6,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <expected>
 
 #include "esp_err.h"
 #include "px/output/output.hpp"
@@ -28,6 +29,9 @@ constexpr size_t kMaxLanes = 16;
 esp_err_t start(const Lane *lanes, size_t count);
 void stop();
 esp_err_t show(const uint8_t *rgb, uint32_t timeout_ms);
+// px::output::encoder_max_us(), encoder_test()
+uint32_t encoder_max_us();
+std::expected<uint32_t, esp_err_t> encoder_test();
 } // namespace i2s
 
 } // namespace px::output::detail

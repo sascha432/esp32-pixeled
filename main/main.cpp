@@ -56,6 +56,9 @@ void start_hardware(const px::board::Info &board, const px::board::Handles &hand
         if (px::relay::start(gpios, pullups, active_low, 2) != ESP_OK) {
             ESP_LOGW(kTag, "LED power switch did not start");
         }
+        // a crash leaves the LEDs as they were until the restart: the supply goes off first
+        px::relay::off_at_crash(1);
+        px::relay::off_at_crash(2);
     }
     const bool bh1750 = handles.i2c != nullptr &&
                         px::light_sensor::start(handles.i2c, board.light_sensor_scale) == ESP_OK;
@@ -72,9 +75,9 @@ void start_hardware(const px::board::Info &board, const px::board::Handles &hand
             ESP_OK) {
         ESP_LOGW(kTag, "motion sensor did not start");
     }
-    if (board.mic_sd_gpio >= 0 &&
-        px::audio::start({.sck = board.mic_sck_gpio, .ws = board.mic_ws_gpio, .sd = board.mic_sd_gpio}) != ESP_OK) {
-        ESP_LOGW(kTag, "microphone did not start");
+    // the audio input: the microphone where the board has one, the UDP inputs on every board
+    if (px::audio::start({.sck = board.mic_sck_gpio, .ws = board.mic_ws_gpio, .sd = board.mic_sd_gpio}) != ESP_OK) {
+        ESP_LOGW(kTag, "audio input did not start");
     }
 }
 
@@ -94,6 +97,7 @@ void start_leds(const px::board::Info &board)
         .set_motion_hold = px::motion::running() ? px::motion::set_hold_s : nullptr,
         .motion_hold_left = px::motion::running() ? px::motion::hold_left_s : nullptr,
         .audio = px::audio::running() ? px::audio::frame : nullptr,
+        .has_audio = px::audio::running() ? px::audio::has_source : nullptr,
     };
     if (px::leds::start(start) != ESP_OK) {
         ESP_LOGE(kTag, "the LEDs did not start");
@@ -141,19 +145,26 @@ extern "C" void app_main()
         ESP_LOGE(kTag, "network did not start");
     } else {
         px::platform::start_time_sync();
+        if (px::audio::running() && px::audio::start_udp() != ESP_OK) {
+            ESP_LOGW(kTag, "the UDP audio inputs did not start");
+        }
         if (px::webserver::start({.device_name = px::platform::device_name(),
                                   .backup = &backup_access(),
                                   .add_routes =
                                       [](void *server) {
                                           px::leds_api::register_routes(server);
                                           px::hass::register_routes(server);
+                                          if (px::audio::running()) {
+                                              px::audio::register_routes(server);
+                                          }
                                       }}) != ESP_OK) {
             ESP_LOGE(kTag, "web server did not start");
         }
         const px::hass::Device device{.name = px::platform::device_name(),
                                       .board = board.name,
                                       .firmware = esp_app_get_description()->version,
-                                      .has_motion = board.motion_gpio >= 0};
+                                      .has_motion = board.motion_gpio >= 0,
+                                      .has_audio = px::audio::running() ? px::audio::has_source : nullptr};
         if (px::hass::start(device) != ESP_OK) {
             ESP_LOGE(kTag, "MQTT did not start");
         }

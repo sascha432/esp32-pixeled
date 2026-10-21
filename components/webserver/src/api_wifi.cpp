@@ -230,16 +230,16 @@ esp_err_t post_add(httpd_req_t *req)
 void register_wifi_routes(httpd_handle_t server)
 {
     const httpd_uri_t routes[] = {
-        {.uri = "/api/wifi", .method = HTTP_GET, .handler = get_wifi, .user_ctx = nullptr},
-        {.uri = "/api/wifi/scan", .method = HTTP_POST, .handler = post_scan, .user_ctx = nullptr},
-        {.uri = "/api/wifi/add", .method = HTTP_POST, .handler = post_add, .user_ctx = nullptr},
-        {.uri = "/api/wifi/remove", .method = HTTP_POST, .handler = post_remove, .user_ctx = nullptr},
-        {.uri = "/api/wifi/move", .method = HTTP_POST, .handler = post_move, .user_ctx = nullptr},
-        {.uri = "/api/wifi/policy", .method = HTTP_POST, .handler = post_policy, .user_ctx = nullptr},
-        {.uri = "/api/wifi/reconnect", .method = HTTP_POST, .handler = post_reconnect, .user_ctx = nullptr},
-        {.uri = "/api/hotspot", .method = HTTP_GET, .handler = get_hotspot, .user_ctx = nullptr},
-        {.uri = "/api/hotspot", .method = HTTP_POST, .handler = post_hotspot, .user_ctx = nullptr},
-        {.uri = "/api/hotspot/password", .method = HTTP_POST, .handler = post_hotspot_password, .user_ctx = nullptr},
+        route("/api/wifi", HTTP_GET, get_wifi),
+        route("/api/wifi/scan", HTTP_POST, post_scan),
+        route("/api/wifi/add", HTTP_POST, post_add),
+        route("/api/wifi/remove", HTTP_POST, post_remove),
+        route("/api/wifi/move", HTTP_POST, post_move),
+        route("/api/wifi/policy", HTTP_POST, post_policy),
+        route("/api/wifi/reconnect", HTTP_POST, post_reconnect),
+        route("/api/hotspot", HTTP_GET, get_hotspot),
+        route("/api/hotspot", HTTP_POST, post_hotspot),
+        route("/api/hotspot/password", HTTP_POST, post_hotspot_password),
     };
     for (const auto &route : routes) {
         httpd_register_uri_handler(server, &route);

@@ -306,9 +306,9 @@ esp_err_t start(const Config &config)
     ESP_RETURN_ON_ERROR(httpd_start(&server, &server_config), kTag, "start");
 
     const httpd_uri_t routes[] = {
-        {.uri = "/api/status", .method = HTTP_GET, .handler = get_status, .user_ctx = nullptr},
+        detail::route("/api/status", HTTP_GET, get_status),
         // last: everything else
-        {.uri = "/*", .method = HTTP_GET, .handler = get_any, .user_ctx = nullptr},
+        detail::route("/*", HTTP_GET, get_any),
     };
     // the API first: "/*" takes everything that is left
     detail::register_session_routes(server);

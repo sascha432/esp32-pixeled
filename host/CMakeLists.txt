@@ -28,11 +28,14 @@ add_executable(px_tests
     tests/layout_test.cpp
     tests/multipart_test.cpp
     tests/network_test.cpp
+    tests/overlay_test.cpp
     tests/timezone_test.cpp
     tests/yaml_test.cpp
     ${PX_ROOT}/components/audio/src/analysis.cpp
+    ${PX_ROOT}/components/audio/src/packets.cpp
     ${PX_ROOT}/components/config/src/backup.cpp
     ${PX_ROOT}/components/effects/src/effects.cpp
+    ${PX_ROOT}/components/effects/src/overlay.cpp
     ${PX_ROOT}/components/formats/src/json_writer.cpp
     ${PX_ROOT}/components/layout/src/layout.cpp
     ${PX_ROOT}/components/leds/src/frame.cpp
@@ -45,6 +48,7 @@ add_executable(px_tests
 )
 target_include_directories(px_tests PRIVATE
     tests
+    ${PX_ROOT}/components/audio/include
     ${PX_ROOT}/components/audio/src
     ${PX_ROOT}/components/config/include
     ${PX_ROOT}/components/effects/include

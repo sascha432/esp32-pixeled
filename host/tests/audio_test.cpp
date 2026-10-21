@@ -1,11 +1,14 @@
-// components/audio/src/analysis.cpp: the FFT, the bands, the gain, silence and the beat.
+// components/audio/src/analysis.cpp: the FFT, the bands, the gain, silence and the beat;
+// packets.cpp: the UDP inputs.
 
 #include <cmath>
+#include <cstring>
 #include <memory>
 #include <vector>
 
 #include "analysis.hpp"
 #include "check.hpp"
+#include "packets.hpp"
 
 using namespace px::audio::detail;
 using px::effects::Audio;
@@ -141,4 +144,176 @@ TEST(audio_a_bass_kick_is_a_beat)
     // the holdoff: the next kick right after is none
     analyzer->process(kick.data(), audio);
     CHECK(!audio.beat);
+}
+
+TEST(audio_settings_silence_level_and_gain)
+{
+    // the quiet hiss (about -74 dB) is silence at -62 dB, sound at -80 dB
+    px::audio::Settings settings;
+    settings.silence_db = -80;
+    auto analyzer = std::make_unique<Analyzer>();
+    analyzer->configure(settings);
+    Audio audio{};
+    const auto hiss = sine(1000.0f, 0.0002f);
+    analyzer->process(hiss.data(), audio);
+    CHECK(audio.active);
+    // +20 dB gain moves the loudest band by 20 dB
+    auto plain = std::make_unique<Analyzer>();
+    auto gained = std::make_unique<Analyzer>();
+    px::audio::Settings louder;
+    louder.gain_db = 20;
+    gained->configure(louder);
+    const auto tone = sine(1000.0f, 0.01f);
+    plain->process(tone.data(), audio);
+    gained->process(tone.data(), audio);
+    CHECK(std::fabs(gained->loudest_db() - plain->loudest_db() - 20.0f) < 0.01f);
+}
+
+TEST(audio_settings_without_automatic_gain_the_top_is_full_scale)
+{
+    // a sine at a tenth of full scale is about -20 dB: halfway up a range of 40 dB
+    px::audio::Settings settings;
+    settings.agc = false;
+    settings.range_db = 40;
+    auto analyzer = std::make_unique<Analyzer>();
+    analyzer->configure(settings);
+    Audio audio{};
+    const auto tone = sine(1000.0f, 0.1f);
+    analyzer->process(tone.data(), audio);
+    CHECK(analyzer->reference_db() == 0.0f);
+    const uint8_t top = audio.bands[loudest_band(audio)];
+    CHECK(top > 115 && top < 141);
+    // the same with the automatic gain fills the bar
+    auto agc = std::make_unique<Analyzer>();
+    agc->process(tone.data(), audio);
+    CHECK(audio.bands[loudest_band(audio)] == 255);
+}
+
+TEST(audio_settings_beat_threshold)
+{
+    // a kick 1.5 times as loud (2.25 times the energy): a beat at 1.6, none at 3.0
+    for (const uint8_t tenths : {uint8_t{16}, uint8_t{30}}) {
+        px::audio::Settings settings;
+        settings.beat_ratio_tenths = tenths;
+        auto analyzer = std::make_unique<Analyzer>();
+        analyzer->configure(settings);
+        Audio audio{};
+        for (int i = 0; i < 40; i++) {
+            const auto steady = sine(60.0f, 0.02f, i * kFftSize);
+            analyzer->process(steady.data(), audio);
+        }
+        const auto kick = sine(60.0f, 0.03f, 40 * kFftSize);
+        analyzer->process(kick.data(), audio);
+        CHECK(audio.beat == (tenths == 16));
+    }
+}
+
+// ------------------------------------------------------------------ the UDP inputs' packets
+
+namespace {
+
+std::vector<uint8_t> warls(const std::vector<uint8_t> &bands, uint8_t left, uint8_t right, uint8_t timeout = 5)
+{
+    std::vector<uint8_t> packet(2 + 4 + 2 + ((bands.size() + 3) & ~size_t{3}) + 2);
+    packet[0] = 1;
+    packet[1] = timeout;
+    packet[2] = 222;
+    packet[3] = 77;
+    packet[4] = left;
+    packet[5] = right;
+    packet[6] = 66;
+    packet[7] = static_cast<uint8_t>(bands.size());
+    std::memcpy(packet.data() + 8, bands.data(), bands.size());
+    return packet;
+}
+
+std::vector<uint8_t> wled_sync(float smooth, uint8_t peak, const uint8_t (&fft)[16])
+{
+    std::vector<uint8_t> packet(44);
+    std::memcpy(packet.data(), "00002", 6);
+    const float raw = smooth;
+    std::memcpy(packet.data() + 8, &raw, 4);
+    std::memcpy(packet.data() + 12, &smooth, 4);
+    packet[16] = peak;
+    std::memcpy(packet.data() + 18, fft, 16);
+    return packet;
+}
+
+} // namespace
+
+TEST(audio_warls_packets)
+{
+    std::vector<uint8_t> bands(32);
+    for (size_t i = 0; i < 32; i++) {
+        bands[i] = static_cast<uint8_t>(i * 8);
+    }
+    Received r{};
+    auto packet = warls(bands, 100, 180);
+    CHECK(packet.size() == 42); // the size of the kfc_fw sender for 32 bands
+    REQUIRE(parse_warls(packet.data(), packet.size(), r));
+    CHECK(r.audio.active);
+    CHECK(r.audio.loudness == 180);
+    CHECK(r.audio.bands[0] == 0 && r.audio.bands[31] == 248);
+    CHECK(r.hold_ms == 5000);
+    CHECK(!r.has_beat);
+    // fewer bands are spread over the 32
+    auto few = warls({0, 255}, 0, 0);
+    REQUIRE(parse_warls(few.data(), few.size(), r));
+    CHECK(r.audio.bands[0] == 0 && r.audio.bands[31] == 255);
+    CHECK(r.audio.bands[16] > 120 && r.audio.bands[16] < 140);
+    // silence is not active
+    auto silent = warls(std::vector<uint8_t>(32), 0, 0);
+    REQUIRE(parse_warls(silent.data(), silent.size(), r));
+    CHECK(!r.audio.active);
+    // broken: timeout 0, magic, band count, short
+    auto zero = warls(bands, 1, 1, 0);
+    CHECK(!parse_warls(zero.data(), zero.size(), r));
+    packet[6] = 65;
+    CHECK(!parse_warls(packet.data(), packet.size(), r));
+    auto one = warls({9}, 1, 1);
+    CHECK(!parse_warls(one.data(), one.size(), r));
+    CHECK(!parse_warls(few.data(), 9, r));
+}
+
+TEST(audio_wled_sync_packets)
+{
+    uint8_t fft[16] = {};
+    fft[0] = 200;
+    fft[15] = 50;
+    Received r{};
+    auto packet = wled_sync(120.4f, 1, fft);
+    REQUIRE(parse_wled_sync(packet.data(), packet.size(), r));
+    CHECK(r.audio.active && r.audio.beat && r.has_beat);
+    CHECK(r.audio.loudness == 120);
+    CHECK(r.audio.bands[0] == 200 && r.audio.bands[31] == 50);
+    CHECK(r.hold_ms == kWledSyncHoldMs);
+    auto quiet = wled_sync(0.0f, 1, {});
+    REQUIRE(parse_wled_sync(quiet.data(), quiet.size(), r));
+    CHECK(!r.audio.active && !r.audio.beat);
+    // v1 and short packets are not taken
+    packet[4] = '1';
+    CHECK(!parse_wled_sync(packet.data(), packet.size(), r));
+    packet[4] = '2';
+    CHECK(!parse_wled_sync(packet.data(), 40, r));
+}
+
+TEST(audio_beat_finder_on_the_bass)
+{
+    BeatFinder finder;
+    Audio audio;
+    audio.active = true;
+    for (size_t b = 0; b < 4; b++) {
+        audio.bands[b] = 80;
+    }
+    size_t beats = 0;
+    uint32_t ms = 0;
+    for (; ms < 2000; ms += 20) {
+        beats += finder.step(audio, 16, ms) ? 1 : 0;
+    }
+    CHECK(beats == 0); // steady bass: no beat
+    for (size_t b = 0; b < 4; b++) {
+        audio.bands[b] = 250;
+    }
+    CHECK(finder.step(audio, 16, ms));
+    CHECK(!finder.step(audio, 16, ms + 20)); // not again within 140 ms
 }

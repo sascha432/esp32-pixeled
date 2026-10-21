@@ -24,6 +24,7 @@ using webserver::detail::form_value;
 using webserver::detail::JsonWriter;
 using webserver::detail::read_body;
 using webserver::detail::require_login;
+using webserver::detail::route;
 using webserver::detail::send_error;
 using webserver::detail::send_json;
 
@@ -111,8 +112,8 @@ esp_err_t post_mqtt(httpd_req_t *req)
 void register_routes(void *server)
 {
     const httpd_uri_t routes[] = {
-        {.uri = "/api/mqtt", .method = HTTP_GET, .handler = get_mqtt, .user_ctx = nullptr},
-        {.uri = "/api/mqtt", .method = HTTP_POST, .handler = post_mqtt, .user_ctx = nullptr},
+        route("/api/mqtt", HTTP_GET, get_mqtt),
+        route("/api/mqtt", HTTP_POST, post_mqtt),
     };
     for (const auto &route : routes) {
         httpd_register_uri_handler(static_cast<httpd_handle_t>(server), &route);

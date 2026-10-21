@@ -8,7 +8,8 @@
 //
 // Entities: a light (JSON schema: on, brightness, RGB color, the animations as effects), a
 // number (speed), sensors (power in W, frames per second), a binary sensor (motion, with a
-// sensor) and a button (restart).
+// sensor), the current animation's rotation and sound settings, the overlay, the power on
+// behavior and a button (restart). The table is in docs/leds.md section 8.
 //
 // Stored in the settings NVS, namespace "mqtt": the settings as a blob, the password apart (it
 // never leaves the device).
@@ -60,6 +61,10 @@ struct Device {
     const char *board;    // the model in Home Assistant
     const char *firmware; // the version
     bool has_motion;      // the binary sensor is announced
+    // an audio source is set up: "Reacts to sound", its strength, attack and release are announced,
+    // "Spectrum" is in the effect list; asked again with every check (a UDP input switched on
+    // announces them); nullptr: none
+    bool (*has_audio)();
 };
 
 // Loads the settings and connects when enabled. Call after the network and the LEDs started.
