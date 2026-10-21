@@ -34,10 +34,26 @@ enum class Reactive : uint8_t {
     Required,
 };
 
+// What the audio input heard last (docs/leds.md section 6.1): the same from every source (the
+// microphone, later UDP), 0..255 each, already scaled to the music's own range.
+constexpr size_t kBands = 32;
+
+struct Audio {
+    // a source runs and hears more than silence
+    bool active = false;
+    uint8_t loudness = 0;
+    // log-spaced from about 50 Hz (band 0) to 10 kHz (band 31)
+    uint8_t bands[kBands] = {};
+    // a beat in the bass since the last frame
+    bool beat = false;
+};
+
 struct Params {
     Rgb color = {255, 120, 40};
     // 0 stands still, 255 is the fastest
     uint8_t speed = 128;
+    // the audio input; nullptr without one
+    const Audio *audio = nullptr;
 };
 
 struct Info {

@@ -23,6 +23,7 @@
 #include "esp_log.h"
 #include "esp_system.h"
 #include "esp_timer.h"
+#include "px/audio/audio.hpp"
 #include "px/board/board.hpp"
 #include "px/light_sensor/ldr.hpp"
 #include "px/logbuf/logbuf.hpp"
@@ -908,6 +909,42 @@ int cmd_motion(int argc, char **argv)
     return usage("motion [status]");
 }
 
+// The microphone: one line of the analysis, the bands as a bar of digits 0..9
+void print_audio()
+{
+    const px::audio::Status s = px::audio::status();
+    char bars[px::effects::kBands + 1];
+    for (size_t b = 0; b < px::effects::kBands; b++) {
+        bars[b] = static_cast<char>('0' + s.audio.bands[b] * 9 / 255);
+    }
+    bars[px::effects::kBands] = '\0';
+    std::printf("%s slot %c, loudest %6.1f dB, gain %6.1f dB, loudness %3u%s |%s|\n",
+                s.audio.active ? "sound  " : "silence", s.slot, static_cast<double>(s.loudest_db),
+                static_cast<double>(s.reference_db), s.audio.loudness, s.audio.beat ? " BEAT" : "     ", bars);
+}
+
+int cmd_audio(int argc, char **argv)
+{
+    if (!px::audio::running()) {
+        std::printf("no microphone\n");
+        return 1;
+    }
+    if (argc == 1 || std::strcmp(argv[1], "status") == 0) {
+        print_audio();
+        return 0;
+    }
+    if (std::strcmp(argv[1], "watch") == 0) {
+        // 5 lines a second
+        const int seconds = argc == 3 ? std::atoi(argv[2]) : 10;
+        for (int i = 0; i < seconds * 5; i++) {
+            vTaskDelay(pdMS_TO_TICKS(200));
+            print_audio();
+        }
+        return 0;
+    }
+    return usage("audio [status|watch [seconds]]");
+}
+
 int cmd_factory_reset(int argc, char **argv)
 {
     if (argc != 2 || std::strcmp(argv[1], "yes") != 0) {
@@ -1004,6 +1041,7 @@ void register_commands()
     add("leds", "the LEDs: state, layout, and output tests", "[status] | on | off | bright <n> | effect [<name>] | color <r> <g> <b> | speed <n> | limit <mW> | driver rmt|parallel | dither on|off | fps <n> | autooff on|off|<min> | lane [<n> ...] | canvas <w> <h> | panel ... | layout | setup <counts...> | fill | px | bench [n] | lanes | resume", cmd_leds);
     add("relay", "the LED power switch: the state, or switched", "[status|<n> on|off]", cmd_relay);
     add("motion", "motion sensor: the state", "[status]", cmd_motion);
+    add("audio", "microphone: the analysis", "[status|watch [s]]", cmd_audio);
 }
 
 // The console's own task: created at the start, so its stack is taken while the internal RAM is

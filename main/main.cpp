@@ -7,6 +7,7 @@
 #include "esp_log.h"
 #include "esp_ota_ops.h"
 #include "esp_rom_sys.h"
+#include "px/audio/audio.hpp"
 #include "px/board/board.hpp"
 #include "px/devconsole/devconsole.hpp"
 #include "px/leds/leds.hpp"
@@ -71,6 +72,10 @@ void start_hardware(const px::board::Info &board, const px::board::Handles &hand
             ESP_OK) {
         ESP_LOGW(kTag, "motion sensor did not start");
     }
+    if (board.mic_sd_gpio >= 0 &&
+        px::audio::start({.sck = board.mic_sck_gpio, .ws = board.mic_ws_gpio, .sd = board.mic_sd_gpio}) != ESP_OK) {
+        ESP_LOGW(kTag, "microphone did not start");
+    }
 }
 
 // The render task (docs/leds.md section 3) on the board's LED pins; the supply and its indicator
@@ -88,6 +93,7 @@ void start_leds(const px::board::Info &board)
         .has_motion = px::motion::running(),
         .set_motion_hold = px::motion::running() ? px::motion::set_hold_s : nullptr,
         .motion_hold_left = px::motion::running() ? px::motion::hold_left_s : nullptr,
+        .audio = px::audio::running() ? px::audio::frame : nullptr,
     };
     if (px::leds::start(start) != ESP_OK) {
         ESP_LOGE(kTag, "the LEDs did not start");

@@ -7,6 +7,17 @@ and what is gone under Removed. Updated in the same commit as the change ([CLAUD
 
 ## Unreleased (0.1.0)
 
+### 2026-10-21
+
+Added
+
+* I2S microphone (INMP441) on the ESP32's I2S1, from the board's pins `mic_sck_gpio`,
+  `mic_ws_gpio`, `mic_sd_gpio`: 32 log bands from 50 Hz to 10 kHz, loudness and beat, with an
+  automatic gain and silence detection. It finds the slot the microphone sends in by itself.
+* Animation "Spectrum": a rainbow bar per band from the bottom; a dim line without sound.
+* Console `audio [status|watch [s]]`: the analysis, the bands as digits.
+* Host tests of the analysis (FFT, bands, gain, fall, silence, beat).
+
 ### 2026-10-20
 
 Added

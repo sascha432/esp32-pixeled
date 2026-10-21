@@ -143,6 +143,8 @@ struct Start {
     void (*set_motion_hold)(uint32_t seconds) = nullptr;
     // the seconds the sensor's detected state still holds, 0 while it sees motion or is clear
     uint32_t (*motion_hold_left)() = nullptr;
+    // the latest audio analysis, taken with every frame; nullptr without an audio input
+    void (*audio)(effects::Audio &out) = nullptr;
 };
 
 esp_err_t start(const Start &config);

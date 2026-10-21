@@ -293,7 +293,11 @@ void render_frame(int64_t now_us)
     }
     t.dark_sent = false;
     effects::Canvas canvas{t.layout.width, t.layout.height, t.canvas};
-    const effects::Params params{.color = t.state.color, .speed = t.state.speed};
+    effects::Audio audio{};
+    if (t.start.audio != nullptr) {
+        t.start.audio(audio);
+    }
+    const effects::Params params{.color = t.state.color, .speed = t.state.speed, .audio = &audio};
     const int64_t begin = esp_timer_get_time();
     effects::render(t.state.effect, canvas, params, static_cast<uint32_t>(now_us / 1000));
     const int64_t rendered = esp_timer_get_time();

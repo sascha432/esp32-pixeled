@@ -80,7 +80,7 @@ is the dependency rule: a component that does not list another cannot include it
               +---------+ +---------+ +---------+ +----------+ +----------+
               |  leds   | |  mqtt   | |  audio  | |webserver | | platform |
               | render, | | HA dis- | | mic,UDP | | API, UI  | | network, |
-              | effects | | covery  | |  (later)| |  files   | | fs, time |
+              | effects | | covery  | |  mic    | |  files   | | fs, time |
               +---------+ +---------+ +---------+ +----------+ +----------+
                    |
                    v
@@ -107,6 +107,7 @@ outputs, `mqtt` and `audio` ([leds.md](leds.md), [TODO.md](TODO.md)).
 | `layout` | `memory` | yes | Canvas and panels, the table canvas -> LED ([leds.md](leds.md) section 4.1) |
 | `effects` | nothing | yes | The animations: canvas, parameters, time ([leds.md](leds.md) section 6) |
 | `leds` | `effects`, `layout`, `output`, `platform` | `frame.cpp` | The render task: state, fade, gamma, power limit, the supply, NVS ([leds.md](leds.md) section 3) |
+| `audio` | `effects` | `analysis.cpp` | The I2S microphone: its task, the FFT, bands, gain and beat; the render task takes the result with each frame ([leds.md](leds.md) section 6.1) |
 | `leds_api` | `leds`, `webserver` | no | `/api/leds`, registered by main through `webserver::Config::add_routes` |
 | `hass` | `espressif/mqtt`, `cjson`, `leds`, `webserver` | no | Home Assistant over MQTT: connection, discovery, commands, state; `/api/mqtt` ([leds.md](leds.md) section 8) |
 | `relay`, `motion`, `light_sensor` | GPIO, I2C, ADC drivers | no | Optional hardware (section 9.6) |
@@ -156,8 +157,9 @@ Built: [leds.md](leds.md) section 8.
 
 ## 7. Audio input
 
-Not built yet: an I2S microphone with an FFT on the device, or spectrum packets over UDP
-([leds.md](leds.md) section 6).
+Built: an I2S microphone with an FFT on the device (`audio`, [leds.md](leds.md) section 6.1),
+started by `main` when the board has `mic_sd_gpio`; `leds::Start::audio` hands each frame the
+latest analysis. Not built yet: spectrum packets over UDP.
 
 ---
 
@@ -341,7 +343,9 @@ one that is not fitted or does not answer is logged and left out.
 * **Light sensor** (`light_sensor`): a BH1750 on the board's I2C bus (0x23 or 0x5C), averaged
   over a second, else an LDR on an ADC1 pin with a calibration table. Will drive the automatic
   brightness (not built). Console `light` shows and calibrates it.
-* Buttons, a rotary encoder, an I2S microphone and a temperature sensor are planned
+* **Microphone** (`audio`): an INMP441 on the board's `mic_sck_gpio`, `mic_ws_gpio` and
+  `mic_sd_gpio` (I2S1 on the ESP32). Console `audio` shows its analysis.
+* Buttons, a rotary encoder and a temperature sensor are planned
   ([leds.md](leds.md) section 9).
 
 ---

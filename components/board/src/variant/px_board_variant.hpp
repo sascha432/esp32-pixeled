@@ -21,6 +21,9 @@ constexpr Info apply(Info info)
     // info.i2c_sda_gpio = 8;                      // sensor modules
     // info.i2c_scl_gpio = 9;
     // info.light_ldr_gpio = 1;                    // an LDR on an ADC1 pin, -1: none
+    // info.mic_sck_gpio = 14;                     // an I2S microphone (INMP441), -1: none
+    // info.mic_ws_gpio = 15;
+    // info.mic_sd_gpio = 32;
     return info;
 }
 

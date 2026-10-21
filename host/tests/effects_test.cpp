@@ -89,3 +89,24 @@ TEST(effects_moving_animations_change_with_time_and_stand_at_speed_0)
         CHECK(still);
     }
 }
+
+TEST(effects_spectrum_draws_a_bar_per_band)
+{
+    std::vector<Rgb> pixels(32 * 8);
+    Canvas canvas{32, 8, pixels.data()};
+    Audio audio;
+    audio.active = true;
+    audio.bands[0] = 255; // the bass: full height
+    audio.bands[31] = 128; // the treble: half
+    Params params;
+    params.audio = &audio;
+    render(find("spectrum"), canvas, params, 0);
+    const auto lit = [&](uint16_t x, uint16_t y) { return !same(canvas.at(x, y), {0, 0, 0}); };
+    CHECK(lit(0, 0) && lit(0, 7));         // column 0 from top to bottom
+    CHECK(!lit(31, 3) && lit(31, 4));      // column 31: the lower half
+    CHECK(!lit(15, 7));                    // a silent band stays dark
+    // without audio: only the line at the bottom
+    params.audio = nullptr;
+    render(find("spectrum"), canvas, params, 0);
+    CHECK(lit(15, 7) && !lit(15, 6));
+}

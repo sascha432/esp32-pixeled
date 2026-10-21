@@ -203,7 +203,23 @@ A 7-segment clock is a shape with segment groups: the digits are a mask over any
 
 All sources fill the same **audio frame**: loudness left and right, 32 bands, beat, peak.
 
-* **I2S microphone** (INMP441 or similar), an FFT on the device (esp-dsp), 32 log-spaced bands.
+* **I2S microphone** (INMP441 or similar), built 2026-10-21 (component `audio`). On the ESP32 it
+  takes I2S1; I2S0 drives the LEDs. 22050 Hz, 32-bit samples, both slots read: the one with the
+  signal is used (the L/R pin of the microphone decides it). A task on core 0 analyzes blocks of
+  512 samples (23 ms, 43 a second):
+  * a Hann window and a 512-point FFT (own radix-2 code, single precision);
+  * 32 bands log-spaced from 50 Hz to 10 kHz, each the loudest bin of its range in dB;
+  * an automatic gain: the reference follows the loudest band up at once and falls 3 dB a
+    second; the 40 dB below it are 0..255, so quiet and loud music both fill the bars;
+  * silence below -62 dB of full scale (a quiet room reads -65 to -75 dB): the bars fall to 0;
+  * the bars rise at once and fall by 12 % of full height per block;
+  * a beat when the bass (bands 0 to 3) is 1.6 times its average, at most one in 140 ms;
+  * the loudness from the block's RMS on the same scale.
+
+  The render task takes the latest result with each frame; a beat stays until a frame took it.
+  The analysis is host tested (`host/tests/audio_test.cpp`). Console `audio [watch [s]]` prints
+  the bands as digits. Not built yet: loudness left and right, the peak, settings (gain range,
+  silence level), the input on the S3 and the C chips.
 * **UDP "WARLS"** spectrum packets, port 21324, the `kfc_fw` format (its `scripts/audio_analyzer`
   sends them from a PC).
 * **WLED audio sync v2**, multicast port 11988, so a WLED sound-reactive device or LedFx can be
@@ -233,7 +249,7 @@ source is active. Shared settings for all of them: sensitivity, attack, release.
 | Meteor / scanner | optional | 1D |
 | Ripple | optional: a ring on the beat | 2D |
 | Matrix rain | optional | 2D |
-| Spectrum bars | only with audio | color: rainbow, gradient or one color; peaks; VU rows (the three bar animations of `kfc_fw` in one) |
+| Spectrum bars | only with audio | color: rainbow, gradient or one color; peaks; VU rows (the three bar animations of `kfc_fw` in one). Built 2026-10-21 as "Spectrum": a rainbow bar per band from the bottom, a narrower canvas shows the loudest band of each group; a dim line while there are no bars |
 
 A shared palette system serves every animation that takes colors.
 
@@ -318,6 +334,6 @@ settings (section 8.1 there).
    layout page of the web UI (done, 2026-10-19).
 4. Animations, palettes, crossfade, presets and playlists.
 5. MQTT and Home Assistant discovery.
-6. Audio: microphone, WARLS, WLED audio sync; reactivity.
+6. Audio: microphone (built 2026-10-21 with the spectrum), WARLS, WLED audio sync; reactivity.
 7. Optional hardware: buttons, encoder, motion, power switch, light, temperature.
 8. Realtime input, live preview over a WebSocket, text and clock overlay, custom shapes.

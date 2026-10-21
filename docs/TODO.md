@@ -1,7 +1,8 @@
 # PixeLED - TODO
 
-State 2026-10-19: phases 1 (skeleton) and 3 (render task, layout, web pages) built and running
-on the test matrix; phase 2 has the RMT output only ([leds.md](leds.md) section 11).
+State 2026-10-21: phases 1 (skeleton), 3 (render task, layout, web pages) and 5 (Home
+Assistant) built and running on the test matrix; phase 2 has RMT and the ESP32 I2S output;
+phase 6 has the microphone and the spectrum ([leds.md](leds.md) section 11).
 
 ## Decide
 
@@ -23,7 +24,7 @@ on the test matrix; phase 2 has the RMT output only ([leds.md](leds.md) section 
   not inverted as the old notes said; its indicator LED is lit by the supply.
 * Buttons of the test board (phase 7): 13 animation, held 3 s restart (software: the PCB has no
   reset button), 35 brightness down, 34 brightness up, 19 on/off. Microphone (INMP441: SD 32,
-  WS 15, SCK 14) to be fitted later.
+  WS 15, SCK 14) in the variant since 2026-10-21.
 * Recovery app sizes (2026-10-19): S3 0.93 MB, C3 0.99 MB, C6 1.07 MB. The 4 MB table's factory
   grew to 1.19 MB for the C6 (ota_0 2.25 MB). Shrink the recovery app (no TLS client? log level)
   before the main firmware with the LED engine needs the room.
@@ -60,8 +61,11 @@ on the test matrix; phase 2 has the RMT output only ([leds.md](leds.md) section 
   balance; the power calibration with the meter. Two replacement LEDs on one panel (other chips) still flicker in
   changing colors at low brightness, the 254 original ones of that panel do not; one whole
   panel flickers in dark yellow and orange (red and green step together). Per-lane dithering
-  built 2026-10-19: that lane gets it off. Maybe later: dithering per LED range, or a minimum
-  number of steps per lane before it dithers.
+  built 2026-10-19: that lane gets it off. 2026-10-20, solid white at low brightness: two of the
+  three panels sparkle with dithering, one is clean; without dithering all are clean, so the
+  timing suits every chip and the sparkle is the chips' slow PWM showing each 1-step change.
+  Rule for new LEDs: this test per lane, dithering off where it sparkles. Maybe later: a
+  minimum number of steps per lane before it dithers.
 * Crossfade between two animations (a second canvas).
 * The supply off in the panic handler.
 * A test pattern per lane ("light the first LED of each lane") on the layout page.
@@ -78,6 +82,16 @@ on the test matrix; phase 2 has the RMT output only ([leds.md](leds.md) section 
   time after the supply switches, if the sensor turns out to see the switch (3 s after an off
   it reported motion once).
 * More entities: presets, palette, transition time, dithering.
+
+## Phase 6: audio (microphone built 2026-10-21)
+
+* Microphone on the test matrix (2026-10-21): found in the left slot, a quiet room reads -65 to
+  -75 dB (silence), typing shows short bars. Open: tried with music by the user; the silence
+  level (-62 dB) and the beat with real music; the bars' fall speed.
+* Reactive switch for rainbow, plasma and breathe ([leds.md](leds.md) section 6.2); audio
+  settings in the web UI and Home Assistant; the LEDs page hides "Spectrum" without a source.
+* The microphone on the S3 and the C chips (I2S0 there, the LEDs use LCD_CAM, RMT or PARLIO).
+* UDP spectrum: WARLS and WLED audio sync.
 
 ## Phase 4 and later
 

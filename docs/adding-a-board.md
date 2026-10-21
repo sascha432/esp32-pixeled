@@ -18,6 +18,7 @@ not a new board (section "Variants" below).
 | the I2C pins for sensor modules | `Info::i2c_sda_gpio`, `i2c_scl_gpio` |
 | an LDR on an ADC1 pin | `Info::light_ldr_gpio` |
 | the board's button | `Info::button_gpio` |
+| an I2S microphone (INMP441): clock, word select, data | `Info::mic_sck_gpio`, `mic_ws_gpio`, `mic_sd_gpio` |
 
 ## 2. Files
 

@@ -83,6 +83,43 @@ void edges(Canvas &canvas, const Params &, uint32_t)
     canvas.at(0, 0) = {255, 255, 255};
 }
 
+// The spectrum (docs/leds.md section 6.3): one bar per band from the bottom, the bands spread over
+// the width (a narrower canvas shows the loudest band of each group), a rainbow from the bass on
+// the left to the treble on the right. Without audio, or once the bars fell in silence, a dim line
+// at the bottom says the animation runs.
+void spectrum(Canvas &canvas, const Params &params, uint32_t)
+{
+    std::memset(canvas.pixels, 0, static_cast<size_t>(canvas.width) * canvas.height * sizeof(Rgb));
+    const uint16_t w = canvas.width;
+    const uint16_t h = canvas.height;
+    const Audio *audio = params.audio;
+    // the bars fall after the sound stopped: the line only once all are down
+    bool bars = false;
+    for (size_t b = 0; audio != nullptr && b < kBands; b++) {
+        bars = bars || audio->bands[b] != 0;
+    }
+    for (uint16_t x = 0; x < w; x++) {
+        const auto hue = static_cast<uint8_t>(x * 200u / (w > 1 ? w - 1 : 1));
+        if (!bars) {
+            canvas.at(x, h - 1) = hsv(hue, 255, 40);
+            continue;
+        }
+        // the bands of this column: one, or the loudest of a group
+        const size_t first = static_cast<size_t>(x) * kBands / w;
+        const size_t last = (static_cast<size_t>(x) + 1) * kBands / w;
+        uint8_t value = audio->bands[first];
+        for (size_t b = first + 1; b < last && b < kBands; b++) {
+            value = audio->bands[b] > value ? audio->bands[b] : value;
+        }
+        // the height in rows, rounded; the lowest row lights from a little sound on
+        const uint32_t rows = (static_cast<uint32_t>(value) * h + 127) / 255;
+        const Rgb color = hsv(hue, 255, 255);
+        for (uint32_t r = 0; r < rows && r < h; r++) {
+            canvas.at(x, static_cast<uint16_t>(h - 1 - r)) = color;
+        }
+    }
+}
+
 using RenderFunction = void (*)(Canvas &, const Params &, uint32_t);
 
 struct Entry {
@@ -95,6 +132,7 @@ constexpr Entry kEffects[] = {
     {{"rainbow", "Rainbow", Reactive::Optional, false}, rainbow},
     {{"plasma", "Plasma", Reactive::Optional, false}, plasma},
     {{"breathe", "Breathe", Reactive::Optional, true}, breathe},
+    {{"spectrum", "Spectrum", Reactive::Required, false}, spectrum},
     {{"edges", "Test: edges", Reactive::Never, false}, edges},
 };
 

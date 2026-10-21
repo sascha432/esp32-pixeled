@@ -29,8 +29,10 @@ Built:
 * MQTT with Home Assistant discovery: light with the animations as effects, speed, power, motion,
   motion auto off, restart.
 * Motion auto off: LEDs off N minutes after the sensor clears, back on with the next motion.
+* I2S microphone (INMP441) on the ESP32: 32 bands, loudness and beat with an automatic gain;
+  animation "Spectrum" (a rainbow bar per band); console `audio`.
 * Optional hardware started from the board's pins: LED power switch (relay or MOSFET, off at
-  boot), motion sensor, light sensor (BH1750 or LDR).
+  boot), motion sensor, light sensor (BH1750 or LDR), microphone.
 * Serial console for development.
 
 Planned ([docs/leds.md](docs/leds.md)):
@@ -38,7 +40,8 @@ Planned ([docs/leds.md](docs/leds.md)):
 * Parallel LED output on the S3 (LCD_CAM) and the C6 (PARLIO); 1024 LEDs per lane on the ESP32.
 * Custom shapes compiled in.
 * More animations with a reactive switch, palettes, crossfade, presets and playlists.
-* Audio: I2S microphone, UDP spectrum (WARLS, WLED audio sync).
+* Audio: reactive animations, audio settings in the web UI and Home Assistant, UDP spectrum
+  (WARLS, WLED audio sync).
 * Realtime input: DDP, E1.31, Art-Net.
 * Live preview, text and clock overlay.
 * Buttons, rotary encoder, temperature protection, power limit, gamma.

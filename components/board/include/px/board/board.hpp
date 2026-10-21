@@ -64,6 +64,11 @@ struct Info {
     int8_t light_ldr_gpio = -1;
     // The board's button (BOOT on the dev kits), low while pressed, -1: none
     int8_t button_gpio = -1;
+    // An I2S microphone (INMP441 or alike: L/R to GND), its clock, word select and data pins,
+    // -1: none (px::audio, docs/leds.md section 6.1)
+    int8_t mic_sck_gpio = -1;
+    int8_t mic_ws_gpio = -1;
+    int8_t mic_sd_gpio = -1;
 };
 
 // The board an image was built for, at a fixed place in every firmware image: ESP-IDF's custom
