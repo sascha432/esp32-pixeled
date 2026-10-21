@@ -1,0 +1,5 @@
+## The MQTT client left ESP-IDF with 6.0 (a managed component now); cJSON reads Home Assistant's
+## JSON commands
+dependencies:
+  espressif/mqtt: "^1"
+  espressif/cjson: "^1.7.19"

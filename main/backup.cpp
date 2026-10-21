@@ -1,0 +1,491 @@
+#include "backup.hpp"
+
+#include <algorithm>
+#include <cstdio>
+#include <cstdlib>
+#include <cstring>
+
+#include "esp_app_desc.h"
+#include "px/board/board.hpp"
+#include "px/config/backup.hpp"
+#include "px/effects/effects.hpp"
+#include "px/layout/layout.hpp"
+#include "px/leds/leds.hpp"
+#include "px/hass/hass.hpp"
+#include "px/network/network.hpp"
+#include "px/webserver/webserver.hpp"
+
+namespace {
+
+namespace backup = px::config::backup;
+namespace net = px::network;
+using px::formats::yaml::Kind;
+using px::formats::yaml::Node;
+using px::memory::String;
+
+String text_of(const char *format, const char *a, const char *b = "")
+{
+    char text[160];
+    std::snprintf(text, sizeof(text), format, a, b);
+    return text;
+}
+
+// ---------------------------------------------------------------------------------- network
+
+constexpr std::string_view kPolicies[] = {"order", "strongest"};
+
+void write_network(backup::Writer &out)
+{
+    net::SavedNetworkInfo saved[net::kMaxNetworks];
+    const size_t count = net::saved_networks(saved, net::kMaxNetworks);
+    const net::Status status = net::status();
+    out.section("network");
+    out.text("policy", kPolicies[status.policy == net::Policy::StrongestSignal ? 1 : 0]);
+    out.boolean("hotspot_on", status.hotspot_enabled);
+    out.comment("passwords are not exported: add \"password: ...\" under a name by hand, or enter them on the device");
+    out.open("networks");
+    for (size_t i = 0; i < count; i++) {
+        out.item("name", saved[i].ssid);
+        if (saved[i].open) {
+            out.boolean("open", true, 3);
+        }
+    }
+}
+
+// one network of the file; false when it has a problem (already in the report)
+bool read_one_network(const Node &item, size_t number, net::ImportedNetwork &out, backup::Report &report)
+{
+    char path[32];
+    std::snprintf(path, sizeof(path), "network.networks[%u]", static_cast<unsigned>(number));
+    const size_t problems = report.problems.size();
+    backup::Fields fields(item, path, report);
+    String name, password;
+    bool open = false;
+    fields.text("name", net::kSsidSize - 1, name);
+    const bool has_password = fields.text("password", net::kPasswordSize - 1, password);
+    fields.boolean("open", open);
+    fields.finish();
+    if (report.problems.size() != problems) {
+        return false;
+    }
+    if (name.empty()) {
+        fields.problem("name", "the name of the network is missing");
+        return false;
+    }
+    if (has_password && !password.empty() && password.size() < net::kMinPassword) {
+        fields.problem("password", "at least 8 characters (none for an open network)");
+        return false;
+    }
+    if (open && has_password && !password.empty()) {
+        fields.problem("open", "an open network has no password");
+        return false;
+    }
+    out = {};
+    std::snprintf(out.ssid, sizeof(out.ssid), "%s", name.c_str());
+    std::snprintf(out.password, sizeof(out.password), "%s", password.c_str());
+    // open: saved without a password, nothing to enter later
+    out.has_password = has_password || open;
+    return true;
+}
+
+void read_network(const Node &value, bool apply, backup::Report &report)
+{
+    // the web server's task is the only caller; too large for its stack
+    static net::ImportedNetwork imported[net::kMaxImport];
+    static net::ImportResult result;
+
+    const net::Status status = net::status();
+    const size_t problems = report.problems.size();
+    backup::Fields fields(value, "network", report);
+    size_t policy = status.policy == net::Policy::StrongestSignal ? 1 : 0;
+    const bool has_policy = fields.choice("policy", kPolicies, policy);
+    bool hotspot = status.hotspot_enabled;
+    const bool has_hotspot = fields.boolean("hotspot_on", hotspot);
+    size_t count = 0;
+    const Node *list = fields.node("networks");
+    if (list != nullptr && list->kind != Kind::List) {
+        fields.problem("networks", "a list of networks expected (- name: ...)");
+    } else if (list != nullptr && list->list.size() > net::kMaxImport) {
+        char message[48];
+        std::snprintf(message, sizeof(message), "at most %u networks", static_cast<unsigned>(net::kMaxImport));
+        fields.problem("networks", message);
+    } else if (list != nullptr) {
+        for (size_t i = 0; i < list->list.size(); i++) {
+            if (!read_one_network(list->list[i], i + 1, imported[count], report)) {
+                continue;
+            }
+            const bool twice = std::any_of(imported, imported + count, [&](const net::ImportedNetwork &other) {
+                return std::strcmp(other.ssid, imported[count].ssid) == 0;
+            });
+            if (twice) {
+                fields.problem("networks", text_of("'%s' is in the list twice", imported[count].ssid));
+                continue;
+            }
+            count++;
+        }
+    }
+    fields.finish();
+    if (report.problems.size() != problems) {
+        return;
+    }
+
+    if (list != nullptr) {
+        // with `apply` false the network task only says what it would do
+        if (net::import_networks(imported, count, apply, result) != ESP_OK) {
+            report.problem("network", "the network task did not answer");
+            return;
+        }
+        for (size_t i = 0; i < result.need_password_count; i++) {
+            report.note("network", text_of("%s needs its password (Wi-Fi page)", result.need_password[i]));
+        }
+        for (size_t i = 0; i < result.dropped_count; i++) {
+            report.note("network", text_of("%s is not saved, at most 5 networks", result.dropped[i]));
+        }
+    }
+    if (apply && has_policy) {
+        net::set_policy(policy == 1 ? net::Policy::StrongestSignal : net::Policy::EnteredOrder);
+    }
+    if (apply && has_hotspot) {
+        net::set_hotspot(hotspot);
+    }
+}
+
+// The web UI login (docs/ui/web/web-app.md section 3): import only. The export writes a hint in
+// comments, never the section: the device stores a hash, the password is not there to write.
+void write_webui(backup::Writer &out)
+{
+    out.comment("the web UI login is not exported; added by hand, an import sets it (and ends every session):", 0);
+    out.comment("webui:", 0);
+    out.comment("  user: admin", 0);
+    out.comment("  password: 8-to-64-characters", 0);
+}
+
+void read_webui(const Node &value, bool apply, backup::Report &report)
+{
+    backup::Fields fields(value, "webui", report);
+    String user;
+    String password;
+    const bool has_user = fields.text("user", 32, user);
+    const bool has_password = fields.text("password", 64, password);
+    fields.finish();
+    if (!has_user && !has_password) {
+        return;
+    }
+    if (!has_user || !has_password) {
+        fields.problem(has_user ? "password" : "user", "user and password go together");
+        return;
+    }
+    char error[64] = {};
+    if (!px::webserver::import_login(user.c_str(), password.c_str(), apply, error, sizeof(error))) {
+        // "user: ..." and "password: ..." name their field
+        const std::string_view text = error;
+        const size_t colon = text.find(": ");
+        const std::string_view key = colon == std::string_view::npos ? "" : text.substr(0, colon);
+        if (key == "user" || key == "password") {
+            fields.problem(key, text.substr(colon + 2));
+        } else {
+            report.problem("webui", text);
+        }
+        return;
+    }
+    report.note("webui", apply ? "new login, sign in again" : "the login will be replaced, sign in again afterwards");
+}
+
+// ------------------------------------------------------------------------------------- leds
+
+// The LEDs (docs/leds.md): the state, the power and timing config and the layout with its panels.
+constexpr std::string_view kCorners[] = {"tl", "tr", "bl", "br"};
+constexpr std::string_view kRuns[] = {"rows", "columns"};
+constexpr std::string_view kDrivers[] = {"rmt", "parallel"};
+constexpr std::string_view kOrders[] = {"grb", "rgb", "brg", "rbg", "gbr", "bgr"};
+
+void write_leds(backup::Writer &out)
+{
+    const px::leds::Status s = px::leds::status();
+    const px::leds::Config c = px::leds::config();
+    const px::leds::Layout l = px::leds::layout();
+    out.section("leds");
+    out.boolean("on", s.state.on);
+    out.number("brightness", s.state.brightness);
+    const px::effects::Info *effect = px::effects::info(s.state.effect);
+    out.text("effect", effect != nullptr ? effect->slug : "solid");
+    char color[8];
+    std::snprintf(color, sizeof(color), "#%02x%02x%02x", s.state.color.r, s.state.color.g, s.state.color.b);
+    out.text("color", color);
+    out.number("speed", s.state.speed);
+    const px::leds::AutoOff a = px::leds::auto_off();
+    out.boolean("auto_off", a.enabled);
+    out.number("auto_off_minutes", a.minutes);
+    out.number("power_limit_mw", static_cast<long>(c.power_limit_mw));
+    out.number("channel_mw", c.channel_mw);
+    out.number("idle_mw", c.idle_mw);
+    out.number("fps", c.fps);
+    out.number("fade_ms", c.fade_ms);
+    out.number("settle_ms", c.settle_ms);
+    out.text("driver", kDrivers[c.driver == px::output::Driver::Parallel ? 1 : 0]);
+    out.boolean("dither", c.dither);
+    out.number("width", l.width);
+    out.number("height", l.height);
+    const px::leds::Lanes lanes = px::leds::lanes();
+    out.open("lanes");
+    for (size_t i = 0; i < s.available_lanes; i++) {
+        const px::leds::LaneSettings &ls = lanes.lane[i];
+        char lane[4];
+        std::snprintf(lane, sizeof(lane), "%u", static_cast<unsigned>(i + 1));
+        out.item("lane", lane);
+        out.text("order", kOrders[static_cast<size_t>(ls.order)], 3);
+        out.number("level", ls.level, 3);
+        out.number("red", ls.red, 3);
+        out.number("green", ls.green, 3);
+        out.number("blue", ls.blue, 3);
+        out.boolean("dither", ls.dither, 3);
+    }
+    out.open("panels");
+    for (size_t i = 0; i < l.panel_count; i++) {
+        const px::layout::Panel &p = l.panels[i];
+        char lane[4];
+        std::snprintf(lane, sizeof(lane), "%u", p.lane + 1u);
+        out.item("lane", lane);
+        out.number("x", p.x, 3);
+        out.number("y", p.y, 3);
+        out.number("width", p.width, 3);
+        out.number("height", p.height, 3);
+        out.text("first", kCorners[static_cast<size_t>(p.first)], 3);
+        out.text("runs", kRuns[p.columns ? 1 : 0], 3);
+        out.boolean("zigzag", p.zigzag, 3);
+    }
+}
+
+bool parse_color(const String &text, px::effects::Rgb &out)
+{
+    if (text.size() != 7 || text[0] != '#') {
+        return false;
+    }
+    char *end = nullptr;
+    const unsigned long value = std::strtoul(text.c_str() + 1, &end, 16);
+    if (*end != 0) {
+        return false;
+    }
+    out = {static_cast<uint8_t>(value >> 16), static_cast<uint8_t>(value >> 8), static_cast<uint8_t>(value)};
+    return true;
+}
+
+void read_leds(const Node &value, bool apply, backup::Report &report)
+{
+    namespace leds = px::leds;
+    const size_t problems = report.problems.size();
+    const leds::Status s = leds::status();
+    leds::State state = s.state;
+    leds::Config config = leds::config();
+    leds::Layout layout = leds::layout();
+    backup::Fields fields(value, "leds", report);
+    fields.boolean("on", state.on);
+    fields.number("brightness", 0, 255, state.brightness);
+    String effect;
+    if (fields.text("effect", 32, effect)) {
+        const size_t index = px::effects::find(effect.c_str());
+        if (index >= px::effects::count()) {
+            fields.problem("effect", "not an animation of this firmware");
+        } else {
+            state.effect = static_cast<uint8_t>(index);
+        }
+    }
+    String color;
+    if (fields.text("color", 7, color) && !parse_color(color, state.color)) {
+        fields.problem("color", "#rrggbb");
+    }
+    fields.number("speed", 0, 255, state.speed);
+    leds::AutoOff auto_off = leds::auto_off();
+    const bool has_auto_off = fields.boolean("auto_off", auto_off.enabled);
+    const bool has_minutes = fields.number("auto_off_minutes", 1, leds::kMaxAutoOffMinutes, auto_off.minutes);
+    fields.number("power_limit_mw", 0, 10000000, config.power_limit_mw);
+    fields.number("channel_mw", 1, 1000, config.channel_mw);
+    fields.number("idle_mw", 0, 100, config.idle_mw);
+    fields.number("fps", 1, 200, config.fps);
+    fields.number("fade_ms", 0, 10000, config.fade_ms);
+    fields.number("settle_ms", 0, 2000, config.settle_ms);
+    fields.boolean("dither", config.dither);
+    size_t driver = config.driver == px::output::Driver::Parallel ? 1 : 0;
+    if (fields.choice("driver", kDrivers, driver)) {
+        config.driver = driver == 1 ? px::output::Driver::Parallel : px::output::Driver::Rmt;
+    }
+    const bool has_width = fields.number("width", 0, 8192, layout.width);
+    const bool has_height = fields.number("height", 0, 8192, layout.height);
+    leds::Lanes lanes = leds::lanes();
+    const Node *lane_list = fields.node("lanes");
+    if (lane_list != nullptr && lane_list->kind != Kind::List) {
+        fields.problem("lanes", "a list of lanes expected (- lane: 1 ...)");
+    } else if (lane_list != nullptr) {
+        for (const Node &item : lane_list->list) {
+            backup::Fields lf(item, fields.path("lanes"), report);
+            long number = 0;
+            if (!lf.number("lane", 1, static_cast<long>(px::output::kMaxLanes), number)) {
+                lf.problem("lane", "the number of the lane is missing");
+                lf.finish();
+                continue;
+            }
+            leds::LaneSettings &ls = lanes.lane[number - 1];
+            size_t order = static_cast<size_t>(ls.order);
+            lf.choice("order", kOrders, order);
+            ls.order = static_cast<px::output::ColorOrder>(order);
+            lf.number("level", 0, 255, ls.level);
+            lf.number("red", 0, 255, ls.red);
+            lf.number("green", 0, 255, ls.green);
+            lf.number("blue", 0, 255, ls.blue);
+            lf.boolean("dither", ls.dither);
+            lf.finish();
+        }
+    }
+    const Node *list = fields.node("panels");
+    const bool has_panels = list != nullptr;
+    if (list != nullptr && list->kind != Kind::List) {
+        fields.problem("panels", "a list of panels expected (- lane: 1 ...)");
+    } else if (list != nullptr && list->list.size() > leds::kMaxPanels) {
+        fields.problem("panels", "at most 16 panels");
+    } else if (list != nullptr) {
+        layout.panel_count = 0;
+        for (const Node &item : list->list) {
+            backup::Fields panel(item, fields.path("panels"), report);
+            px::layout::Panel p{};
+            long lane = 1;
+            size_t first = 0, runs = 0;
+            panel.number("lane", 1, 16, lane);
+            panel.number("x", 0, 8192, p.x);
+            panel.number("y", 0, 8192, p.y);
+            panel.number("width", 1, 8192, p.width);
+            panel.number("height", 1, 8192, p.height);
+            panel.choice("first", kCorners, first);
+            panel.choice("runs", kRuns, runs);
+            panel.boolean("zigzag", p.zigzag);
+            panel.finish();
+            p.lane = static_cast<uint8_t>(lane - 1);
+            p.first = static_cast<px::layout::Corner>(first);
+            p.columns = runs == 1;
+            layout.panels[layout.panel_count++] = p;
+        }
+    }
+    fields.finish();
+    if (report.problems.size() != problems) {
+        return;
+    }
+    if (has_width || has_height || has_panels) {
+        // the layout is checked like the web UI's: one that cannot be shown is a problem
+        if (layout.panel_count > 0) {
+            auto table = px::layout::build(layout.width, layout.height, {layout.panels, layout.panel_count});
+            if (!table) {
+                report.problem("leds.panels", table.error().text);
+                return;
+            }
+        }
+        if (apply) {
+            char error[96] = {};
+            if (!leds::set_layout(layout, error, sizeof(error))) {
+                report.problem("leds", error);
+                return;
+            }
+        }
+    }
+    if (apply) {
+        char error[64] = {};
+        if (!leds::set_config(config, error, sizeof(error))) {
+            report.problem("leds", error);
+            return;
+        }
+        if (lane_list != nullptr) {
+            leds::set_lanes(lanes);
+        }
+        if (has_auto_off || has_minutes) {
+            leds::set_auto_off(auto_off);
+        }
+        leds::set_effect(state.effect);
+        leds::set_color(state.color);
+        leds::set_speed(state.speed);
+        leds::set_brightness(state.brightness);
+        leds::set_on(state.on);
+    }
+}
+
+// ------------------------------------------------------------------------------------- mqtt
+
+// MQTT (docs/leds.md section 8): the broker and the topics; the password never, one added by hand
+// is used
+void write_mqtt(backup::Writer &out)
+{
+    const px::hass::Settings s = px::hass::settings();
+    out.section("mqtt");
+    out.boolean("enabled", s.enabled);
+    out.text("uri", s.uri);
+    out.text("username", s.username);
+    if (px::hass::password_set()) {
+        out.comment("password: stored on the device, not exported; add it here to set it");
+    }
+    out.text("prefix", s.prefix);
+    out.text("base", s.base);
+}
+
+void read_mqtt(const Node &value, bool apply, backup::Report &report)
+{
+    const size_t problems = report.problems.size();
+    px::hass::Settings s = px::hass::settings();
+    backup::Fields fields(value, "mqtt", report);
+    String uri(s.uri), username(s.username), prefix(s.prefix), base(s.base), password;
+    fields.boolean("enabled", s.enabled);
+    fields.text("uri", px::hass::kUriSize - 1, uri);
+    fields.text("username", px::hass::kUserSize - 1, username);
+    const bool has_password = fields.text("password", px::hass::kPasswordSize - 1, password);
+    fields.text("prefix", px::hass::kTopicSize - 1, prefix);
+    fields.text("base", px::hass::kTopicSize - 1, base);
+    fields.finish();
+    if (report.problems.size() != problems) {
+        return;
+    }
+    std::snprintf(s.uri, sizeof(s.uri), "%s", uri.c_str());
+    std::snprintf(s.username, sizeof(s.username), "%s", username.c_str());
+    std::snprintf(s.prefix, sizeof(s.prefix), "%s", prefix.c_str());
+    std::snprintf(s.base, sizeof(s.base), "%s", base.c_str());
+    if (s.enabled && !has_password && !px::hass::password_set() && !username.empty()) {
+        report.note("mqtt", "the broker's password is not in the file: add it on the MQTT page");
+    }
+    if (!apply) {
+        return;
+    }
+    char error[96] = {};
+    if (!px::hass::set_settings(s, has_password ? password.c_str() : nullptr, error, sizeof(error))) {
+        report.problem("mqtt", error);
+    }
+}
+
+// ------------------------------------------------------------------------------------ table
+
+// in this order: a section may depend on one before it
+const backup::Section kSections[] = {
+    {"network", write_network, read_network},
+    {"leds", write_leds, read_leds},
+    {"mqtt", write_mqtt, read_mqtt},
+    {"webui", write_webui, read_webui},
+};
+
+const px::webserver::BackupAccess kBackupAccess{
+    .export_file =
+        [](bool settings, bool presets) {
+            const backup::Device device{px::board::info().name, esp_app_get_description()->version};
+            return backup::write(device, kSections, settings, presets);
+        },
+    .import_file =
+        [](std::string_view text, bool check_only) {
+            backup::Report report = backup::read(text, kSections, !check_only);
+            px::webserver::BackupReport out;
+            out.problems = std::move(report.problems);
+            out.ignored = std::move(report.ignored);
+            out.notes = std::move(report.notes);
+            out.sections = std::move(report.sections);
+            return out;
+        },
+};
+
+} // namespace
+
+const px::webserver::BackupAccess &backup_access()
+{
+    return kBackupAccess;
+}

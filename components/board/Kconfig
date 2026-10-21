@@ -1,0 +1,26 @@
+menu "PixeLED board"
+
+    choice PX_BOARD
+        prompt "Board"
+        help
+            The board the firmware is built for. Each board's sdkconfig.defaults in boards/<name>/
+            selects it, see docs/architecture.md section 8.
+
+        config PX_BOARD_ESP32S3_DEVKIT
+            bool "ESP32-S3-DevKitC-1 N16R8 (16 MB flash, 8 MB octal PSRAM)"
+            depends on IDF_TARGET_ESP32S3
+
+        config PX_BOARD_ESP32_DEVKIT
+            bool "ESP32-DevKitC / WROOM-32 (4 MB flash, no PSRAM)"
+            depends on IDF_TARGET_ESP32
+
+        config PX_BOARD_ESP32C3_DEVKIT
+            bool "ESP32-C3-DevKitM-1 (4 MB flash)"
+            depends on IDF_TARGET_ESP32C3
+
+        config PX_BOARD_ESP32C6_DEVKIT
+            bool "ESP32-C6-DevKitC-1 (8 MB flash, 4 MB used)"
+            depends on IDF_TARGET_ESP32C6
+    endchoice
+
+endmenu

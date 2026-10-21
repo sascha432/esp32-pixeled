@@ -1,0 +1,42 @@
+#pragma once
+
+// Which saved network to connect to, from the results of a scan. Plain C++ without ESP-IDF, so it
+// can be tested on the PC (docs/architecture.md section 3, host tests).
+
+#include <cstddef>
+#include <cstdint>
+
+#include "px/network/network.hpp"
+
+namespace px::network::detail {
+
+struct SavedNetwork {
+    char ssid[kSsidSize];
+    char password[kPasswordSize];
+    // saved by an import without its password: never tried until the user enters one (an empty
+    // password is a valid open network, so it cannot be the marker)
+    bool password_needed;
+};
+
+struct SeenAp {
+    char ssid[kSsidSize];
+    uint8_t bssid[6];
+    int8_t rssi;
+    uint8_t channel;
+};
+
+struct Candidate {
+    uint8_t index; // into the saved networks
+    uint8_t bssid[6];
+    int8_t rssi;
+    uint8_t channel;
+};
+
+// `failed` has bit i set when the last attempt on saved network i failed in this round. Those are
+// skipped while another saved network is in range. A network that needs its password is never
+// chosen. Of several access points with the same
+// name, the strongest one is taken. False when no saved network is in range.
+bool choose(const SavedNetwork *saved, size_t saved_count, const SeenAp *seen, size_t seen_count, Policy policy,
+            uint32_t failed, Candidate &out);
+
+} // namespace px::network::detail

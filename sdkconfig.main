@@ -1,0 +1,16 @@
+# Main firmware layer (docs/architecture.md section 2).
+
+# rendering speed over size: the LED frames are computed on the CPU
+CONFIG_COMPILER_OPTIMIZATION_PERF=y
+
+# 1 ms tick: the render task paces frames to the millisecond (docs/leds.md section 3)
+CONFIG_FREERTOS_HZ=1000
+
+# app_main starts everything; freed when app_main returns
+CONFIG_ESP_MAIN_TASK_STACK_SIZE=6144
+
+# The RMT output refills each lane's pulse memory from its interrupt every few pixels (ESP32: no
+# DMA). Without this the interrupt waits while the flash is busy (LittleFS reads of the web UI,
+# settings writes), the line idles longer than the latch and the LEDs show garbage: seen on the
+# test matrix while the LEDs page polled (2026-10-19). Puts the handler and the encoders in IRAM.
+CONFIG_RMT_TX_ISR_CACHE_SAFE=y

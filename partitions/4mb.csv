@@ -1,0 +1,12 @@
+# esp32-pixeled, 4 MB flash (docs/architecture.md section 9.5)
+# One OTA partition: an update reboots into the recovery app, which writes ota_0.
+# The recovery app needs 1.07 MB on the ESP32-C6 (2026-10-19): factory 1.19 MB, ota_0 2.25 MB.
+# "nvs" is the system NVS (Wi-Fi driver, PHY), "settings" the NVS of the firmware.
+# Name,    Type, SubType,  Offset,   Size
+nvs,       data, nvs,      0x9000,   0x4000
+otadata,   data, ota,      0xd000,   0x2000
+phy_init,  data, phy,      0xf000,   0x1000
+factory,   app,  factory,  0x10000,  0x130000
+ota_0,     app,  ota_0,    0x140000, 0x240000
+storage,   data, littlefs, 0x380000, 0x70000
+settings,  data, nvs,      0x3f0000, 0x10000
