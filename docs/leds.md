@@ -97,6 +97,8 @@ hand it a frame, get a callback when it is out. Behind it one backend per chip:
   frame early and the LEDs show garbage. Seen on the ESP32 while the web UI polled: the interrupt
   waited for the flash. Built: the interrupt runs while the flash is busy
   (`CONFIG_RMT_TX_ISR_CACHE_SAFE`), each lane gets the memory of the unused channels, level 3.
+  Measured on the AI-C3 board (2026-10-22, strips on both lanes): 2 x 512 LEDs at 60 fps (the
+  wire 15.7 ms a frame), so about 2 x 600 for 50 fps.
 * Lanes may have different pixel counts; the shorter ones send zeros after their last pixel.
 * **First step is a spike per chip**: fps, CPU load and glitches with Wi-Fi, MQTT and the web UI
   busy, checked with a logic analyzer.

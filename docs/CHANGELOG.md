@@ -18,8 +18,8 @@ Added
   microphone, taken pins), with the clones AI-S3 (ESP32-S3 N16R8: photo, pinout image, RGB LED on
   GPIO 48, the solder jumpers) and AI-C3 (ESP32-C3-MINI-1: photo, pin headers). Their variants
   `esp32s3_devkit.ai_s3_test` (8 lanes on GPIO 4 to 7 and 15 to 18) and
-  `esp32c3_devkit.ai_c3_test` (2 lanes on GPIO 4 and 5), without relay or sensors, are in git as
-  examples.
+  `esp32c3_devkit.ai_c3_test` (2 lanes on GPIO 10 and 4; 2 x 512 LEDs at 60 fps), without relay
+  or sensors, are in git as examples.
 * Time page: "Custom rule (POSIX TZ)" in the zone list, a text field for a rule of its own when the
   firmware's IANA table is out of date. `/api/time` takes a rule as `zone` and reports `rule`; the
   backup keeps either.

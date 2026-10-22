@@ -8,9 +8,10 @@
 // The RGB LED sits behind the place "RGB" next to it, most likely on GPIO 8 as on the DevKitM-1
 // (not checked), not driven. Photo and pin headers: docs/boards.md.
 //
-// No sensors, no relay: only the 2 LED lanes of the C3's RMT, on the pins next to each other on
-// the header with 4 to 9: 4, 5.
-// Boots with this variant (2026-10-22); no strip tried yet.
+// No sensors, no relay: the 2 LED lanes of the C3's RMT, lane 1 on GPIO 10 (the header with 0 to
+// 3 and 10; of those 2 is strapping, 0 and 1 are the 32 kHz crystal pins), lane 2 on GPIO 4 (the
+// other header).
+// Tested 2026-10-22: strips on both lanes, 2 x 512 LEDs at 60 fps (about 2 x 600 for 50 fps).
 #pragma once
 
 #include "px/board/board.hpp"
@@ -20,7 +21,7 @@ namespace px::board::variant {
 constexpr Info apply(Info info)
 {
     info.variant = "ai_c3_test";
-    info.led_gpios = lanes({4, 5});
+    info.led_gpios = lanes({10, 4});
     info.power_gpio = -1;
     info.motion_gpio = -1;
     info.i2c_sda_gpio = -1;

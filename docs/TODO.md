@@ -118,9 +118,10 @@ styles take it. Not tried: the factory reset path (it erases the test board's se
   boards.md), 2026-10-22. Strips on lanes 1 to 4 (GPIO 4 to 7, 4 x 1024 in the
   layout) light with RMT and with the S3 parallel output (LCD_CAM, 2026-10-22: 29 fps); all 8 lanes with
   LCD_CAM (8 x 32 at 100 fps, smooth, checked by the user; RMT has 4 TX channels on the S3). Its 5Vin pin has no USB 5 V while the jumper IN-OUT is open.
-* C3 test board: the AI-C3 (ESP32-C3-MINI-1, 4 MB) on COM12, variant `esp32c3_devkit.ai_c3_test`
-  (in git, boards.md), 2026-10-22. Boots, hotspot up; open: a strip on lanes 1
-  and 2 (GPIO 4, 5), the GPIO of its RGB LED (8?), the 5V pins with power from USB.
+* C3 test board: the AI-C3 (ESP32-C3-MINI-1, 4 MB) on COM14 (CH340K; its port USB: COM12),
+  variant `esp32c3_devkit.ai_c3_test` (in git, boards.md), 2026-10-22. Strips on lanes 1 and 2
+  (GPIO 10, 4) light with RMT: 2 x 512 at 60 fps, about 2 x 600 for 50 fps. Open: the GPIO of its
+  RGB LED (8?), the 5V pins with power from USB.
 * Recovery app sizes (2026-10-19): S3 0.93 MB, C3 0.99 MB, C6 1.07 MB. The 4 MB table's factory
   grew to 1.19 MB for the C6 (ota_0 2.25 MB). Shrink the recovery app (no TLS client? log level)
   before the main firmware with the LED engine needs the room.

@@ -14,7 +14,7 @@ follows it and changes in the same commit as a board, a variant or a pin. How to
 | `esp32_devkit.wled_controller_rev1_1` | WLED controller PCB rev 1.1 | ESP32, 4 MB, none | 4 | yes, the test matrix |
 | `esp32_devkit.wled_controller_rev1_3` | WLED controller PCB rev 1.3 | ESP32, 4 MB, none | 4 | no |
 | `esp32c3_devkit` | Espressif ESP32-C3-DevKitM-1 | ESP32-C3, 4 MB, none | 2 (RMT) | as the AI-C3 |
-| `esp32c3_devkit.ai_c3_test` | AI-C3 (clone, example variant) | ESP32-C3, 4 MB, none | 2 | boots, COM12 |
+| `esp32c3_devkit.ai_c3_test` | AI-C3 (clone, example variant) | ESP32-C3, 4 MB, none | 2 | yes, COM14 |
 | `esp32c6_devkit` | Espressif ESP32-C6-DevKitC-1 | ESP32-C6, 8 MB (4 used), none | 4 pins, 2 with RMT | no |
 
 The pins are the defaults of a new device ([architecture.md](architecture.md) section 8). -1 or
@@ -148,25 +148,30 @@ the DevKitM-1's RGB LED, 9 is BOOT).
 ![AI-C3 back and front](images/ai-c3.png)
 
 A purple ESP32-C3 board ("AI-C3" on the back) in the style of the AI-S3, smaller: an
-ESP32-C3-MINI-1 module, two USB-C ports (COM: a USB-to-UART chip, USB: the C3's own USB on GPIO
+ESP32-C3-MINI-1 module, two USB-C ports (COM: a CH340K USB-to-UART chip, USB: the C3's own USB on GPIO
 18 and 19), RST and BOOT buttons, one RGB LED and the LEDs PWR, RX and TX, 2 × 15 pins. Read with
 esptool: ESP32-C3 (QFN32) rev v0.4, 4 MB flash in the chip (XMC), no PSRAM, so it runs
 `esp32c3_devkit`. The variant is in git as an example of a variant.
 
 | Function | GPIO |
 | --- | --- |
-| LED lanes 1 and 2 | 4, 5 |
-| LED supply, motion, I2C, LDR, microphone | – |
+| LED lanes 1 and 2 | 10, 4 |
+| LED supply, motion sensor, I2C, LDR, microphone | – (none on the board, off in the variant) |
 | Button 1 (BOOT, the hotspot button) | 9 |
 | RGB LED (not driven) | 8? (as on the DevKitM-1, not checked) |
 
-* Header with the lanes (back, photo top; front, bottom row): GND, 19, 18, GND, 4, 5, 6, 7, GND,
-  8, 9, GND, RX, TX, GND. Lanes 1 and 2 (4, 5) sit next to each other.
-* Other header: GND, 5V, 5V, GND, 10, 1, 0, GND, RST, GND, 3, 2, 3V3, 3V3, GND.
-* All pins of the board's defaults are on the headers (supply 10, motion 3, I2C 6 and 7, LDR 1).
+* Header with lane 2 (back, photo top; front, bottom row): GND, 19, 18, GND, 4, 5, 6, 7, GND,
+  8, 9, GND, RX, TX, GND. Lane 2 (4) sits next to GND.
+* Other header: GND, 5V, 5V, GND, 10, 1, 0, GND, RST, GND, 3, 2, 3V3, 3V3, GND. Lane 1 (10) sits
+  next to 5V and GND. Of the other pins there, 2 is strapping and 0 and 1 take an optional 32 kHz
+  crystal.
+* No LED supply switch, motion sensor, LDR or I2C sensors on the board: the variant turns off the
+  defaults of `esp32c3_devkit` (supply 10, motion 3, I2C 6 and 7, LDR 1), so 3, 6, 7 and 1 stay
+  free and 10 is lane 1.
 * The RGB LED sits behind the place "RGB" next to it, as on the AI-S3.
-* Tested 2026-10-22: firmware, recovery and web UI flashed, it starts and opens its hotspot. Open:
-  a strip on lanes 1 and 2, the GPIO of the RGB LED, the 5V pins with power from USB.
+* Tested 2026-10-22: firmware, recovery and web UI flashed; strips on lanes 1 and 2 (GPIO 10 and
+  4), 2 x 512 LEDs at 60 fps (about 2 x 600 for 50 fps). Open: the GPIO of the RGB LED, the 5V
+  pins with power from USB.
 
 ## ESP32-C6: `esp32c6_devkit`
 
