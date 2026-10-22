@@ -14,9 +14,11 @@
 #include "px/layout/layout.hpp"
 #include "px/leds/leds.hpp"
 #include "px/hass/hass.hpp"
+#include "px/input/input.hpp"
 #include "px/network/network.hpp"
 #include "px/platform/time_sync.hpp"
 #include "px/platform/timezone.hpp"
+#include "px/presets/presets.hpp"
 #include "px/webserver/webserver.hpp"
 
 namespace {
@@ -264,7 +266,7 @@ void write_leds(backup::Writer &out)
         const px::leds::Style &st = styles.style[i];
         const px::leds::Style standard{};
         if (st.rotation == 0 && !st.reactive && st.strength == standard.strength && st.attack_ms == standard.attack_ms &&
-            st.release_ms == standard.release_ms) {
+            st.release_ms == standard.release_ms && st.palette == standard.palette) {
             continue;
         }
         if (!opened) {
@@ -277,6 +279,7 @@ void write_leds(backup::Writer &out)
         out.number("strength", st.strength, 3);
         out.number("attack_ms", st.attack_ms, 3);
         out.number("release_ms", st.release_ms, 3);
+        out.text("palette", px::effects::palette_info(st.palette)->slug, 3);
     }
     out.open("panels");
     for (size_t i = 0; i < l.panel_count; i++) {
@@ -292,6 +295,22 @@ void write_leds(backup::Writer &out)
         out.text("runs", kRuns[p.columns ? 1 : 0], 3);
         out.boolean("zigzag", p.zigzag, 3);
     }
+}
+
+// the palette of an animation or a preset by its slug; false (a problem) when there is none
+bool read_palette(backup::Fields &fields, uint8_t &palette)
+{
+    String slug;
+    if (!fields.text("palette", 32, slug)) {
+        return true;
+    }
+    const size_t index = px::effects::find_palette(slug.c_str());
+    if (index >= px::effects::palette_count()) {
+        fields.problem("palette", "not a palette of this firmware");
+        return false;
+    }
+    palette = static_cast<uint8_t>(index);
+    return true;
 }
 
 bool parse_color(const String &text, px::effects::Rgb &out)
@@ -425,6 +444,7 @@ void read_leds(const Node &value, bool apply, backup::Report &report)
             af.number("strength", 0, 255, styles.style[index].strength);
             af.number("attack_ms", 0, px::effects::kMaxAttackMs, styles.style[index].attack_ms);
             af.number("release_ms", 0, px::effects::kMaxReleaseMs, styles.style[index].release_ms);
+            read_palette(af, styles.style[index].palette);
             af.finish();
         }
     }
@@ -502,6 +522,185 @@ void read_leds(const Node &value, bool apply, backup::Report &report)
         leds::set_speed(state.speed);
         leds::set_brightness(state.brightness);
         leds::set_on(state.on);
+    }
+}
+
+// ---------------------------------------------------------------------------------- presets
+
+// The presets (docs/leds.md section 10), the backup's presets part: the whole list, in its order.
+void write_presets(backup::Writer &out)
+{
+    out.section("presets");
+    out.open("list");
+    for (size_t i = 0; i < px::presets::count(); i++) {
+        px::presets::Preset p{};
+        if (!px::presets::get(i, p)) {
+            break;
+        }
+        out.item("name", p.name);
+        const px::effects::Info *effect = px::effects::info(p.effect);
+        out.text("effect", effect != nullptr ? effect->slug : "solid", 3);
+        char color[8];
+        std::snprintf(color, sizeof(color), "#%02x%02x%02x", p.color.r, p.color.g, p.color.b);
+        out.text("color", color, 3);
+        out.number("speed", p.speed, 3);
+        out.number("brightness", p.brightness, 3);
+        out.number("rotation", p.style.rotation * 90, 3);
+        out.boolean("reactive", p.style.reactive, 3);
+        out.number("strength", p.style.strength, 3);
+        out.number("attack_ms", p.style.attack_ms, 3);
+        out.number("release_ms", p.style.release_ms, 3);
+        out.text("palette", px::effects::palette_info(p.style.palette)->slug, 3);
+    }
+}
+
+void read_presets(const Node &value, bool apply, backup::Report &report)
+{
+    namespace presets = px::presets;
+    // the web server's task is the only caller; too large for its stack
+    static presets::Preset list[presets::kMaxPresets];
+    const size_t problems = report.problems.size();
+    backup::Fields fields(value, "presets", report);
+    const Node *items = fields.node("list");
+    fields.finish();
+    size_t count = 0;
+    if (items != nullptr && items->kind != Kind::List) {
+        fields.problem("list", "a list of presets expected (- name: ...)");
+    } else if (items != nullptr && items->list.size() > presets::kMaxPresets) {
+        fields.problem("list", "at most 16 presets");
+    } else if (items != nullptr) {
+        for (const Node &item : items->list) {
+            backup::Fields pf(item, fields.path("list"), report);
+            presets::Preset &p = list[count];
+            p = {};
+            p.speed = 128;
+            p.brightness = 128;
+            p.color = {255, 120, 40};
+            String name;
+            if (!pf.text("name", presets::kNameSize - 1, name) || name.empty()) {
+                pf.problem("name", "the name of the preset is missing");
+            }
+            std::snprintf(p.name, sizeof(p.name), "%s", name.c_str());
+            String effect;
+            const size_t index = pf.text("effect", 32, effect) ? px::effects::find(effect.c_str()) : 0;
+            if (index >= px::effects::count() || index >= px::leds::kMaxEffects) {
+                pf.problem("effect", "not an animation of this firmware");
+            }
+            p.effect = static_cast<uint8_t>(index);
+            String color;
+            if (pf.text("color", 7, color) && !parse_color(color, p.color)) {
+                pf.problem("color", "#rrggbb");
+            }
+            pf.number("speed", 0, 255, p.speed);
+            pf.number("brightness", 1, 255, p.brightness);
+            long degrees = 0;
+            pf.number("rotation", 0, 270, degrees);
+            if (degrees % 90 != 0) {
+                pf.problem("rotation", "0, 90, 180 or 270");
+            }
+            p.style.rotation = static_cast<uint8_t>(degrees / 90);
+            pf.boolean("reactive", p.style.reactive);
+            pf.number("strength", 0, 255, p.style.strength);
+            pf.number("attack_ms", 0, px::effects::kMaxAttackMs, p.style.attack_ms);
+            pf.number("release_ms", 0, px::effects::kMaxReleaseMs, p.style.release_ms);
+            read_palette(pf, p.style.palette);
+            pf.finish();
+            const bool twice = std::any_of(list, list + count, [&](const presets::Preset &other) {
+                return std::strcmp(other.name, p.name) == 0;
+            });
+            if (twice) {
+                fields.problem("list", text_of("'%s' is in the list twice", name.c_str()));
+            }
+            count++;
+        }
+    }
+    if (report.problems.size() != problems || items == nullptr || !apply) {
+        return;
+    }
+    char error[64] = {};
+    if (!presets::set_all(list, count, error, sizeof(error))) {
+        report.problem("presets", error);
+    }
+}
+
+// ------------------------------------------------------------------------------------ input
+
+// What the buttons and the encoder's push do (docs/leds.md section 9): the buttons the board has
+constexpr std::string_view kInputKeys[] = {"click", "double", "hold"};
+
+void write_actions(backup::Writer &out, const px::input::Actions &a, int level)
+{
+    out.text("click", px::input::action_slug(a.click), level);
+    out.text("double", px::input::action_slug(a.double_click), level);
+    out.text("hold", px::input::action_slug(a.hold), level);
+}
+
+void write_input(backup::Writer &out)
+{
+    const px::input::Status s = px::input::status();
+    const px::input::Settings c = px::input::settings();
+    out.section("input");
+    out.open("buttons");
+    for (size_t i = 0; i < px::input::kMaxButtons; i++) {
+        if (s.button_gpio[i] < 0) {
+            continue;
+        }
+        char number[4];
+        std::snprintf(number, sizeof(number), "%u", static_cast<unsigned>(i + 1));
+        out.item("button", number);
+        write_actions(out, c.button[i], 3);
+    }
+    if (s.encoder_button >= 0) {
+        out.open("encoder");
+        write_actions(out, c.button[px::input::kEncoderButton], 2);
+    }
+}
+
+// one button's actions; a slug that is no action is a problem
+void read_actions(backup::Fields &fields, px::input::Actions &a)
+{
+    px::input::Action *actions[] = {&a.click, &a.double_click, &a.hold};
+    for (size_t i = 0; i < std::size(kInputKeys); i++) {
+        String slug;
+        if (fields.text(kInputKeys[i], 32, slug) && !px::input::find_action(slug.c_str(), *actions[i])) {
+            fields.problem(kInputKeys[i], "not an action (none, on-off, next-animation, ...)");
+        }
+    }
+}
+
+void read_input(const Node &value, bool apply, backup::Report &report)
+{
+    const size_t problems = report.problems.size();
+    px::input::Settings c = px::input::settings();
+    backup::Fields fields(value, "input", report);
+    const Node *list = fields.node("buttons");
+    if (list != nullptr && list->kind != Kind::List) {
+        fields.problem("buttons", "a list of buttons expected (- button: 1 ...)");
+    } else if (list != nullptr) {
+        for (const Node &item : list->list) {
+            backup::Fields bf(item, fields.path("buttons"), report);
+            long number = 0;
+            if (!bf.number("button", 1, static_cast<long>(px::input::kMaxButtons), number)) {
+                bf.problem("button", "the number of the button is missing");
+                bf.finish();
+                continue;
+            }
+            read_actions(bf, c.button[number - 1]);
+            bf.finish();
+        }
+    }
+    if (const Node *encoder = fields.node("encoder"); encoder != nullptr) {
+        backup::Fields ef(*encoder, fields.path("encoder"), report);
+        read_actions(ef, c.button[px::input::kEncoderButton]);
+        ef.finish();
+    }
+    fields.finish();
+    if (report.problems.size() != problems || !apply) {
+        return;
+    }
+    char error[64] = {};
+    if (!px::input::set_settings(c, error, sizeof(error))) {
+        report.problem("input", error);
     }
 }
 
@@ -663,7 +862,9 @@ const backup::Section kSections[] = {
     {"audio", write_audio, read_audio},
     {"mqtt", write_mqtt, read_mqtt},
     {"time", write_time, read_time},
+    {"input", write_input, read_input, px::input::running},
     {"webui", write_webui, read_webui},
+    {"presets", write_presets, read_presets, nullptr, backup::Part::Presets},
 };
 
 const px::webserver::BackupAccess kBackupAccess{

@@ -15,6 +15,8 @@ Built:
 * Wi-Fi with up to 5 networks, entered order or strongest signal, roaming on a weak signal.
 * Hotspot with a captive portal for the first setup (open while setting up), mDNS
   `<device>.local`.
+* Headless recovery: the hotspot opens after 5 minutes without Wi-Fi, or open when the board's
+  hotspot button is held at boot.
 * Web UI: status, Wi-Fi, hotspot, MQTT, time, log, system (update, backup, restart, files), login.
 * Clock over SNTP: time zone and two servers on the web UI's Time page (pool.ntp.org and
   time.cloudflare.com as built), in the backup.
@@ -33,13 +35,21 @@ Built:
   stored and restored.
 * Each animation turns by 0, 90, 180 or 270 degrees; all but solid react to sound with their own
   switch, strength, attack and release.
+* Palettes for the animations with colors of their own (rainbow, party, ocean, forest, lava,
+  heat, cloud, sunset, pastel, shades of the color), kept per animation.
+* Presets: up to 16 named lights (animation, color, speed, brightness, style) on LittleFS, in the
+  backup's presets part.
 * Text and clock overlay over every animation (5 x 7 font with umlauts, scrolling).
 * At power on: as before, off or on.
-* Web: LEDs page (live preview, on, brightness, animation, color, speed, rotation, sound
-  settings, overlay, status, sound input with the bands live, power and timing) and Layout.
-* MQTT with Home Assistant discovery: light with the animations as effects, speed, rotation,
-  reacts to sound, sound strength, attack and release, overlay and its text, power on, power,
-  motion, motion auto off, restart.
+* Web: LEDs page (live preview, on, brightness, animation, palette, color, speed, rotation, sound
+  settings, presets, overlay, buttons, status, sound input with the bands live, power and timing)
+  and Layout.
+* MQTT with Home Assistant discovery: light with the animations as effects and HA's transition,
+  speed, rotation, palette, preset, reacts to sound, sound strength, attack and release, overlay
+  and its text, transition and crossfade times, dithering, power on, power, motion, motion auto
+  off, restart.
+* Buttons (up to 4) and a rotary encoder: click, double click and hold each with an action (on /
+  off, animation, preset, brightness, restart, hotspot); the encoder dims with acceleration.
 * Motion auto off: LEDs off N minutes after the sensor clears, back on with the next motion (also
   after a restart).
 * I2S microphone (INMP441) on the ESP32: 32 bands, loudness and beat with an automatic gain;
@@ -57,9 +67,9 @@ Planned ([docs/leds.md](docs/leds.md)):
 
 * Parallel LED output on the S3 (LCD_CAM) and the C6 (PARLIO).
 * Custom shapes compiled in.
-* Palettes, presets and playlists.
+* Playlists.
 * Realtime input: DDP, E1.31, Art-Net.
-* Buttons, rotary encoder, temperature protection, power limit, gamma.
+* Temperature protection.
 
 ## Supported hardware
 

@@ -36,6 +36,8 @@ enum class MsgType : uint8_t {
     Hotspot,
     NewHotspotPassword,
     ForceHotspot,
+    OpenHotspot,
+    Pause,
     Import,
     WifiEvent,
     GotIp,
@@ -90,6 +92,14 @@ struct Task {
     bool setup_failed = false;
     // the hotspot is on whatever the settings say; not stored (the recovery app)
     bool force_hotspot = false;
+    // Headless recovery (docs/architecture.md section 9.1): no connection since this tick, while
+    // networks are saved (`offline`); after kOfflineHotspotMs the hotspot opens with its password
+    // (`offline_hotspot`) and stays on until kAfterRecoveryMs after the next connection
+    // (`offline_hotspot_until`, 0 = no timer)
+    bool offline = false;
+    TickType_t offline_since = 0;
+    bool offline_hotspot = false;
+    TickType_t offline_hotspot_until = 0;
     uint8_t setup_failures = 0;
     // saved networks whose connection attempt failed in this round, for any reason (bit per
     // index): the next attempt takes another saved network in range. A round ends with a
@@ -128,7 +138,8 @@ extern SemaphoreHandle_t g_lock;
 
 // copies for other tasks, guarded by g_lock
 extern Status g_status;
-extern TickType_t g_setup_hotspot_until;
+// the later of the setup's and the offline hotspot's timers, 0 = none
+extern TickType_t g_hotspot_until;
 extern SavedNetworkInfo g_saved[kMaxNetworks];
 extern size_t g_saved_count;
 extern ScanEntry g_scan[kMaxScan];
@@ -166,6 +177,8 @@ void on_disconnected(uint8_t reason);
 void on_got_ip(uint32_t ip);
 // roaming: a weak signal for a while scans for a better access point
 void check_signal();
+// the hotspot of the setup or of the offline device stays on this long after a connection
+constexpr uint32_t kAfterConnectMs = 15 * 60 * 1000;
 
 // ---------------------------------------------------------------------- commands.cpp
 
@@ -174,5 +187,7 @@ void cmd_remove(uint8_t index);
 void cmd_move(uint8_t index, int8_t delta);
 void cmd_import(const ImportJob &job);
 void cmd_reconnect();
+// development: the connection drops, no attempt for `seconds`
+void cmd_pause(uint32_t seconds);
 
 } // namespace px::network::detail

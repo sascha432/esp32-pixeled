@@ -7,9 +7,11 @@
 #include "esp_log.h"
 #include "esp_ota_ops.h"
 #include "esp_rom_sys.h"
+#include "esp_system.h"
 #include "px/audio/audio.hpp"
 #include "px/board/board.hpp"
 #include "px/devconsole/devconsole.hpp"
+#include "px/input/input.hpp"
 #include "px/leds/leds.hpp"
 #include "px/leds_api/leds_api.hpp"
 #include "px/light_sensor/ldr.hpp"
@@ -23,6 +25,7 @@
 #include "px/platform/storage.hpp"
 #include "px/platform/system_info.hpp"
 #include "px/platform/time_sync.hpp"
+#include "px/presets/presets.hpp"
 #include "px/relay/relay.hpp"
 #include "px/webserver/webserver.hpp"
 #include "backup.hpp"
@@ -30,6 +33,8 @@
 namespace {
 
 constexpr const char *kTag = "main";
+// the board's hotspot button held this long while the device starts opens the hotspot
+constexpr uint32_t kHotspotHoldMs = 2000;
 
 // Every failed allocation with the state of both heaps, also with the log output off.
 void on_alloc_failed(size_t size, uint32_t caps, const char *function)
@@ -43,9 +48,45 @@ void on_alloc_failed(size_t size, uint32_t caps, const char *function)
                    static_cast<unsigned>(heap_caps_get_largest_free_block(MALLOC_CAP_SPIRAM)));
 }
 
+// what a button or the encoder does (docs/leds.md section 9)
+void on_input(px::input::Action action, int steps)
+{
+    using px::input::Action;
+    switch (action) {
+    case Action::OnOff:
+        px::leds::toggle();
+        break;
+    case Action::NextAnimation:
+        px::leds::step_effect(steps);
+        break;
+    case Action::PreviousAnimation:
+        px::leds::step_effect(-steps);
+        break;
+    case Action::NextPreset:
+        px::presets::apply_next();
+        break;
+    case Action::BrightnessUp:
+        px::leds::step_brightness(steps);
+        break;
+    case Action::BrightnessDown:
+        px::leds::step_brightness(-steps);
+        break;
+    case Action::Restart:
+        ESP_LOGW(kTag, "restart by the button");
+        esp_restart();
+        break;
+    case Action::Hotspot:
+        px::network::open_hotspot();
+        break;
+    case Action::None:
+    case Action::Knob:
+        break;
+    }
+}
+
 // The optional hardware of the board (docs/architecture.md section 8.1): what is not fitted or
-// does not answer is logged and left out.
-void start_hardware(const px::board::Info &board, const px::board::Handles &handles)
+// does not answer is logged and left out. `hotspot`: the hotspot button was held at boot.
+void start_hardware(const px::board::Info &board, const px::board::Handles &handles, bool &hotspot)
 {
     // The LED power supply stays off until the LEDs show something (docs/leds.md section 5):
     // relay 1 the supply, relay 2 its indicator LED.
@@ -78,6 +119,23 @@ void start_hardware(const px::board::Info &board, const px::board::Handles &hand
     // the audio input: the microphone where the board has one, the UDP inputs on every board
     if (px::audio::start({.sck = board.mic_sck_gpio, .ws = board.mic_ws_gpio, .sd = board.mic_sd_gpio}) != ESP_OK) {
         ESP_LOGW(kTag, "audio input did not start");
+    }
+    // the buttons and the encoder; the hotspot button held while starting asks for the hotspot (a
+    // headless device whose Wi-Fi is gone)
+    const size_t hotspot_button = board.hotspot_button < board.button_gpios.size() ? board.hotspot_button : 0;
+    hotspot = px::input::held_at_boot(board.button_gpios[hotspot_button], kHotspotHoldMs);
+    if (hotspot) {
+        ESP_LOGW(kTag, "button %u held at boot: the hotspot opens", static_cast<unsigned>(hotspot_button + 1));
+    }
+    const esp_err_t input = px::input::start({.buttons = board.button_gpios.data(),
+                                              .button_count = board.button_gpios.size(),
+                                              .encoder_a = board.encoder_a_gpio,
+                                              .encoder_b = board.encoder_b_gpio,
+                                              .encoder_button = board.encoder_button_gpio,
+                                              .hotspot_button = static_cast<uint8_t>(hotspot_button)},
+                                             on_input);
+    if (input != ESP_OK && input != ESP_ERR_NOT_FOUND) {
+        ESP_LOGW(kTag, "the buttons did not start");
     }
 }
 
@@ -138,12 +196,19 @@ extern "C" void app_main()
              board.variant != nullptr ? board.variant : "");
     px::board::Handles handles{};
     px::board::init(handles);
-    start_hardware(board, handles);
+    bool hotspot = false;
+    start_hardware(board, handles, hotspot);
     start_leds(board);
+    if (px::presets::start() != ESP_OK) {
+        ESP_LOGW(kTag, "the presets did not start");
+    }
 
     if (px::network::start(px::platform::device_name(), nullptr, nullptr) != ESP_OK) {
         ESP_LOGE(kTag, "network did not start");
     } else {
+        if (hotspot) {
+            px::network::open_hotspot();
+        }
         px::platform::start_time_sync();
         if (px::audio::running() && px::audio::start_udp() != ESP_OK) {
             ESP_LOGW(kTag, "the UDP audio inputs did not start");
@@ -163,6 +228,8 @@ extern "C" void app_main()
                                           if (px::audio::running()) {
                                               px::audio::register_routes(server);
                                           }
+                                          // the API answers without buttons too (none listed)
+                                          px::input::register_routes(server);
                                       }}) != ESP_OK) {
             ESP_LOGE(kTag, "web server did not start");
         }

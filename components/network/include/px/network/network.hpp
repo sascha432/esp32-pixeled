@@ -20,8 +20,11 @@
 //     background scan looks for an access point that is clearly better and switches to it.
 //   * Hotspot: on while no network is saved (first setup), and back on when a network of the first
 //     setup fails (wrong password at once, other errors after 3 attempts); for 15 minutes after the first
-//     successful connection of the setup, and whenever the user turned it on. It never opens by
-//     itself when the Wi-Fi fails (not built for the headless device yet: docs/TODO.md).
+//     successful connection of the setup, and whenever the user turned it on.
+//   * Headless recovery: after kOfflineHotspotMs without a connection (saved networks out of reach,
+//     a wrong password) the hotspot opens with its password; open_hotspot() (the board's button
+//     held at boot) opens it without one. Either stays on until 15 minutes after the next
+//     connection.
 //   * The hotspot of the first setup is open (no screen shows a password). Otherwise it takes the
 //     password generated on the first boot: 8 digits and 2 lowercase letters.
 
@@ -42,6 +45,8 @@ constexpr int8_t kUsableRssi = -75;   // "entered order" skips networks weaker t
 constexpr int8_t kWeakRssi = -70;     // roaming starts below this (Apple's trigger)
 constexpr uint32_t kWeakForMs = 30000;
 constexpr int8_t kRoamMarginDb = 8;   // a new access point has to be this much stronger
+// a device with saved networks and no connection for this long opens its hotspot
+constexpr uint32_t kOfflineHotspotMs = 5 * 60 * 1000;
 
 enum class Policy : uint8_t {
     EnteredOrder,
@@ -76,7 +81,8 @@ struct Status {
     // the hotspot of the first setup is open; the password applies after it
     bool hotspot_open;
     uint8_t hotspot_clients;
-    // seconds until the hotspot of the setup turns off, 0 while no such timer runs
+    // seconds until the hotspot of the setup (or of a time offline) turns off, 0 while no such
+    // timer runs
     uint32_t hotspot_off_in_s;
     // the user wants the hotspot on (stored)
     bool hotspot_enabled;
@@ -155,6 +161,14 @@ esp_err_t reconnect();
 esp_err_t scan();
 // The hotspot on whatever the settings say, not stored: the recovery app is always reachable.
 esp_err_t force_hotspot(bool on);
+// Someone at the device asks for the hotspot (the board's button held at boot): on and open, as
+// in the first setup, until 15 minutes after the next connection. Not stored.
+esp_err_t open_hotspot();
+// Development (the console's `wifi pause`): the connection drops and the device tries no network
+// for `seconds` (at most kMaxPauseS), as if they were all gone; then it connects as usual. Not
+// stored. For trying the hotspot of an offline device (kOfflineHotspotMs).
+constexpr uint32_t kMaxPauseS = 3600;
+esp_err_t pause(uint32_t seconds);
 esp_err_t set_hotspot(bool on);
 esp_err_t new_hotspot_password();
 

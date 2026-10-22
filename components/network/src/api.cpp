@@ -42,7 +42,7 @@ Status status()
     }
     xSemaphoreTake(g_lock, portMAX_DELAY);
     copy = g_status;
-    const TickType_t until = g_setup_hotspot_until;
+    const TickType_t until = g_hotspot_until;
     xSemaphoreGive(g_lock);
     if (until != 0) {
         const int32_t left = static_cast<int32_t>(until - xTaskGetTickCount());
@@ -151,6 +151,19 @@ esp_err_t scan()
 esp_err_t force_hotspot(bool on)
 {
     return command(MsgType::ForceHotspot, 0, on ? 1 : 0);
+}
+
+esp_err_t pause(uint32_t seconds)
+{
+    Msg msg{};
+    msg.type = MsgType::Pause;
+    msg.ip = seconds > kMaxPauseS ? kMaxPauseS : seconds;
+    return (g_queue != nullptr && xQueueSend(g_queue, &msg, pdMS_TO_TICKS(100)) == pdTRUE) ? ESP_OK : ESP_ERR_TIMEOUT;
+}
+
+esp_err_t open_hotspot()
+{
+    return command(MsgType::OpenHotspot);
 }
 
 esp_err_t set_hotspot(bool on)

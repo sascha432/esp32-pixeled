@@ -227,6 +227,14 @@ Rgb scale(Rgb c, uint32_t value)
             static_cast<uint8_t>(c.b * value / 255)};
 }
 
+// The color of a hue at `value`: the hue circle without a palette, else the palette's color at that
+// place (docs/leds.md section 6.4)
+Rgb paint(const Params &params, uint8_t hue, uint8_t saturation, uint8_t value)
+{
+    return params.palette == 0 ? hsv(hue, saturation, value)
+                               : scale(palette_color(params.palette, hue, params.color), value);
+}
+
 void clear(Canvas &canvas)
 {
     std::memset(canvas.pixels, 0, static_cast<size_t>(canvas.width) * canvas.height * sizeof(Rgb));
@@ -262,7 +270,7 @@ void rainbow(Canvas &canvas, const Params &params, uint32_t ms)
     for (uint16_t y = 0; y < canvas.height; y++) {
         for (uint16_t x = 0; x < canvas.width; x++) {
             const auto hue = static_cast<uint8_t>((x + y) * 256u / span + shift);
-            canvas.at(x, y) = hsv(hue, 255, value);
+            canvas.at(x, y) = paint(params, hue, 255, value);
         }
     }
 }
@@ -290,7 +298,7 @@ void plasma(Canvas &canvas, const Params &params, uint32_t ms)
         for (uint16_t x = 0; x < canvas.width; x++) {
             const uint32_t v = sin8(static_cast<uint8_t>(x * 16 + t)) + sin8(static_cast<uint8_t>(y * 12 + t2)) +
                                sin8(static_cast<uint8_t>((x + y) * 8 + t + t2));
-            canvas.at(x, y) = hsv(static_cast<uint8_t>(v / 3 + t + hue_shift), 240, value);
+            canvas.at(x, y) = paint(params, static_cast<uint8_t>(v / 3 + t + hue_shift), 240, value);
         }
     }
 }
@@ -315,9 +323,14 @@ void breathe(Canvas &canvas, const Params &params, uint32_t ms)
     }
 }
 
-// black, red, yellow, white
-Rgb heat_color(uint8_t heat)
+// black, red, yellow, white; with a palette its colors, dark at no heat (the palette's end is not
+// blended into its start)
+Rgb heat_color(uint8_t heat, const Params &params)
 {
+    if (params.palette != 0) {
+        return scale(palette_color(params.palette, static_cast<uint8_t>(heat * 240u / 255u), params.color),
+                     heat < 85 ? heat * 3u : 255u);
+    }
     const auto t = static_cast<uint8_t>(heat * 191u / 255u);
     const auto ramp = static_cast<uint8_t>((t & 63u) << 2);
     if ((t & 0x80) != 0) {
@@ -393,7 +406,7 @@ void fire(Canvas &canvas, const Params &params, uint32_t ms)
     }
     for (uint16_t row = 0; row < h; row++) {
         for (uint16_t x = 0; x < w; x++) {
-            canvas.at(x, static_cast<uint16_t>(h - 1 - row)) = heat_color(cell(x, row));
+            canvas.at(x, static_cast<uint16_t>(h - 1 - row)) = heat_color(cell(x, row), params);
         }
     }
 }
@@ -437,7 +450,7 @@ void spectrum(Canvas &canvas, const Params &params, uint32_t ms)
     for (uint16_t x = 0; x < w; x++) {
         const auto hue = static_cast<uint8_t>(x * 200u / (w > 1 ? w - 1 : 1));
         if (!bars) {
-            canvas.at(x, h - 1) = hsv(hue, 255, 40);
+            canvas.at(x, h - 1) = paint(params, hue, 255, 40);
             continue;
         }
         // the bands of this column: one, or the loudest of a group
@@ -449,7 +462,7 @@ void spectrum(Canvas &canvas, const Params &params, uint32_t ms)
         }
         // the height in rows, rounded; the lowest row lights from a little sound on
         const uint32_t rows = (static_cast<uint32_t>(value) * h + 127) / 255;
-        const Rgb color = hsv(hue, 255, 255);
+        const Rgb color = paint(params, hue, 255, 255);
         for (uint32_t r = 0; r < rows && r < h; r++) {
             canvas.at(x, static_cast<uint16_t>(h - 1 - r)) = color;
         }
@@ -490,7 +503,7 @@ void color_fade(Canvas &canvas, const Params &params, uint32_t ms)
     if (Memory *m = params.audio != nullptr ? memory_of(canvas) : nullptr) {
         hue += beat_hue(*m, sound, dt, 64u);
     }
-    const Rgb c = hsv(static_cast<uint8_t>(hue), 255, sound.value);
+    const Rgb c = paint(params, static_cast<uint8_t>(hue), 255, sound.value);
     const size_t n = static_cast<size_t>(canvas.width) * canvas.height;
     for (size_t i = 0; i < n; i++) {
         canvas.pixels[i] = c;
@@ -622,7 +635,7 @@ void ripple(Canvas &canvas, const Params &params, uint32_t ms)
         const uint64_t radius = r.radius < 8 ? 8 : r.radius;
         const uint64_t r2 = static_cast<uint64_t>(r.radius) * r.radius;
         const uint32_t fade = 255u - r.radius * 255u / largest;
-        const Rgb color = hsv(r.hue, 255, static_cast<uint8_t>(fade * loud / 255u));
+        const Rgb color = paint(params, r.hue, 255, static_cast<uint8_t>(fade * loud / 255u));
         for (uint16_t y = 0; y < h; y++) {
             const int64_t dy = (static_cast<int64_t>(y) - r.y) * 16;
             for (uint16_t x = 0; x < w; x++) {
@@ -718,7 +731,7 @@ void noise(Canvas &canvas, const Params &params, uint32_t ms)
     for (uint16_t y = 0; y < canvas.height; y++) {
         for (uint16_t x = 0; x < canvas.width; x++) {
             const uint8_t n = noise8(x * 32u, y * 32u + z, z);
-            canvas.at(x, y) = hsv(static_cast<uint8_t>(n + hue), 255, value);
+            canvas.at(x, y) = paint(params, static_cast<uint8_t>(n + hue), 255, value);
         }
     }
 }
@@ -731,29 +744,87 @@ struct Entry {
 };
 
 constexpr Entry kEffects[] = {
-    {{"solid", "Solid", Reactive::Never, true}, solid},
-    {{"rainbow", "Rainbow", Reactive::Optional, false}, rainbow},
-    {{"plasma", "Plasma", Reactive::Optional, false}, plasma},
-    {{"breathe", "Breathe", Reactive::Optional, true}, breathe},
-    {{"spectrum", "Spectrum", Reactive::Required, false}, spectrum},
-    {{"fire", "Fire", Reactive::Optional, false}, fire},
-    {{"gradient", "Gradient", Reactive::Optional, true}, gradient},
-    {{"color-fade", "Color fade", Reactive::Optional, false}, color_fade},
-    {{"twinkle", "Twinkle", Reactive::Optional, true}, twinkle},
-    {{"meteor", "Meteor", Reactive::Optional, true}, meteor},
-    {{"ripple", "Ripple", Reactive::Optional, false}, ripple},
-    {{"matrix", "Matrix rain", Reactive::Optional, true}, matrix},
-    {{"noise", "Noise", Reactive::Optional, false}, noise},
+    {{"solid", "Solid", Reactive::Never, true, false}, solid},
+    {{"rainbow", "Rainbow", Reactive::Optional, false, true}, rainbow},
+    {{"plasma", "Plasma", Reactive::Optional, false, true}, plasma},
+    {{"breathe", "Breathe", Reactive::Optional, true, false}, breathe},
+    {{"spectrum", "Spectrum", Reactive::Required, false, true}, spectrum},
+    {{"fire", "Fire", Reactive::Optional, false, true}, fire},
+    {{"gradient", "Gradient", Reactive::Optional, true, false}, gradient},
+    {{"color-fade", "Color fade", Reactive::Optional, false, true}, color_fade},
+    {{"twinkle", "Twinkle", Reactive::Optional, true, false}, twinkle},
+    {{"meteor", "Meteor", Reactive::Optional, true, false}, meteor},
+    {{"ripple", "Ripple", Reactive::Optional, false, true}, ripple},
+    {{"matrix", "Matrix rain", Reactive::Optional, true, false}, matrix},
+    {{"noise", "Noise", Reactive::Optional, false, true}, noise},
     // test patterns last; the index of an animation is stored (the state, the styles): a new one
     // goes before them
-    {{"edges", "Test: edges", Reactive::Never, false}, edges},
+    {{"edges", "Test: edges", Reactive::Never, false, false}, edges},
 };
+
+// ------------------------------------------------------------------------------- palettes
+
+// 16 colors each (0xrrggbb), once around; the colors between them are blended. Party, ocean,
+// forest, lava, heat and cloud have the colors of FastLED's palettes of the same names.
+struct Palette {
+    PaletteInfo info;
+    uint32_t colors[16];
+};
+
+// the index of a palette is stored (the styles, the presets): a new one goes at the end
+constexpr Palette kPalettes[] = {
+    // none: the animation's own colors (the table is the rainbow, for palette_color)
+    {{"none", "Its own colors"},
+     {0xff0000, 0xff6000, 0xffc000, 0xe1ff00, 0x81ff00, 0x21ff00, 0x00ff3c, 0x00ff9c, 0x00fffc, 0x00a5ff, 0x0045ff,
+      0x1800ff, 0x7800ff, 0xd800ff, 0xff00c9, 0xff0069}},
+    {{"rainbow", "Rainbow"},
+     {0xff0000, 0xff6000, 0xffc000, 0xe1ff00, 0x81ff00, 0x21ff00, 0x00ff3c, 0x00ff9c, 0x00fffc, 0x00a5ff, 0x0045ff,
+      0x1800ff, 0x7800ff, 0xd800ff, 0xff00c9, 0xff0069}},
+    {{"party", "Party"},
+     {0x5500ab, 0x84007c, 0xb5004b, 0xe5001b, 0xe81700, 0xb84700, 0xab7700, 0xabab00, 0xab5500, 0xdd2200, 0xf2000e,
+      0xc2003e, 0x8f0071, 0x5f00a1, 0x2f00d0, 0x0007f9}},
+    {{"ocean", "Ocean"},
+     {0x191970, 0x00008b, 0x191970, 0x000080, 0x00008b, 0x0000cd, 0x2e8b57, 0x008080, 0x5f9ea0, 0x0000ff, 0x008b8b,
+      0x6495ed, 0x7fffd4, 0x2e8b57, 0x00ffff, 0x87cefa}},
+    {{"forest", "Forest"},
+     {0x006400, 0x006400, 0x556b2f, 0x006400, 0x008000, 0x228b22, 0x6b8e23, 0x008000, 0x2e8b57, 0x66cdaa, 0x32cd32,
+      0x9acd32, 0x90ee90, 0x7cfc00, 0x66cdaa, 0x228b22}},
+    {{"lava", "Lava"},
+     {0x000000, 0x800000, 0x000000, 0x800000, 0x8b0000, 0x8b0000, 0x800000, 0x8b0000, 0x8b0000, 0x8b0000, 0xff0000,
+      0xffa500, 0xffffff, 0xffa500, 0xff0000, 0x8b0000}},
+    {{"heat", "Heat"},
+     {0x000000, 0x330000, 0x660000, 0x990000, 0xcc0000, 0xff0000, 0xff3300, 0xff6600, 0xff9900, 0xffcc00, 0xffff00,
+      0xffff33, 0xffff66, 0xffff99, 0xffffcc, 0xffffff}},
+    {{"cloud", "Cloud"},
+     {0x0000ff, 0x00008b, 0x00008b, 0x00008b, 0x00008b, 0x00008b, 0x00008b, 0x00008b, 0x0000ff, 0x00008b, 0x87ceeb,
+      0x87ceeb, 0xadd8e6, 0xffffff, 0xadd8e6, 0x87ceeb}},
+    {{"sunset", "Sunset"},
+     {0x780000, 0xb31600, 0xe03c00, 0xff6800, 0xffa020, 0xffc860, 0xff9060, 0xe05080, 0xa7169a, 0x6a0c8c, 0x2a0a6a,
+      0x100a40, 0x2a0a6a, 0x6a0c8c, 0xb31600, 0x900400}},
+    {{"pastel", "Pastel"},
+     {0xff9191, 0xffbb91, 0xffe491, 0xf3ff91, 0xc9ff91, 0xa0ff91, 0x91ffab, 0x91ffd5, 0x91fffe, 0x91d9ff, 0x91afff,
+      0x9c91ff, 0xc591ff, 0xef91ff, 0xff91e8, 0xff91bf}},
+    // made from Params::color, see palette_color
+    {{"color", "Shades of the color"}, {}},
+};
+
+constexpr size_t kColorPalette = std::size(kPalettes) - 1;
+
+Rgb rgb_of(uint32_t c)
+{
+    return {static_cast<uint8_t>(c >> 16), static_cast<uint8_t>(c >> 8), static_cast<uint8_t>(c)};
+}
 
 } // namespace
 
 size_t count()
 {
     return std::size(kEffects);
+}
+
+size_t animation_count()
+{
+    return find("edges");
 }
 
 const Info *info(size_t index)
@@ -769,6 +840,42 @@ size_t find(const char *slug)
         }
     }
     return count();
+}
+
+size_t palette_count()
+{
+    return std::size(kPalettes);
+}
+
+const PaletteInfo *palette_info(size_t index)
+{
+    return index < palette_count() ? &kPalettes[index].info : nullptr;
+}
+
+size_t find_palette(const char *slug)
+{
+    for (size_t i = 0; i < palette_count(); i++) {
+        if (std::strcmp(kPalettes[i].info.slug, slug) == 0) {
+            return i;
+        }
+    }
+    return palette_count();
+}
+
+Rgb palette_color(uint8_t palette, uint8_t index, Rgb color)
+{
+    if (palette == kColorPalette) {
+        // the color, darker toward the middle and back: a quarter of it at the darkest
+        const uint32_t dip = index < 128 ? index * 2u : (255u - index) * 2u;
+        return scale(color, 255u - dip * 191u / 255u);
+    }
+    const uint32_t *colors = kPalettes[palette < palette_count() ? palette : 0].colors;
+    const Rgb a = rgb_of(colors[index >> 4]);
+    const Rgb b = rgb_of(colors[((index >> 4) + 1) & 15]);
+    const uint32_t f = (index & 15u) * 16u;
+    return {static_cast<uint8_t>((a.r * (256u - f) + b.r * f) >> 8),
+            static_cast<uint8_t>((a.g * (256u - f) + b.g * f) >> 8),
+            static_cast<uint8_t>((a.b * (256u - f) + b.b * f) >> 8)};
 }
 
 size_t memory_size(uint16_t width, uint16_t height)

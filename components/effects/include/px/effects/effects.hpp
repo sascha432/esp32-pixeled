@@ -3,7 +3,9 @@
 // The animations (docs/leds.md section 6): each draws a whole canvas from its parameters and the
 // time. The ones that need state between frames (fire, the reactive ones) keep it in the canvas'
 // memory, which the render task gives and clears. Each animation can be turned in quarter turns
-// (Params::rotation); render() does that for all of them. Pure C++, host tested.
+// (Params::rotation); render() does that for all of them. The ones with colors of their own (a
+// rainbow, the heat of fire) can take them from a palette instead (Params::palette, docs/leds.md
+// section 6.4). Pure C++, host tested.
 
 #include <cstddef>
 #include <cstdint>
@@ -72,6 +74,8 @@ struct Params {
     // there, 0 at once
     uint16_t attack_ms = 20;
     uint16_t release_ms = 250;
+    // an index of the palettes (palette_info), 0: the animation's own colors
+    uint8_t palette = 0;
 };
 
 constexpr uint16_t kMaxAttackMs = 2000;
@@ -85,13 +89,33 @@ struct Info {
     Reactive reactive;
     // it shows Params::color
     bool uses_color;
+    // it takes its colors from Params::palette
+    bool uses_palette;
 };
 
 size_t count();
+// the animations before the test patterns (they come last)
+size_t animation_count();
 // nullptr for an index from count() on
 const Info *info(size_t index);
 // the index of `slug`, count() when there is none
 size_t find(const char *slug);
+
+// The palettes (docs/leds.md section 6.4): 16 colors around a circle, blended between them.
+// Palette 0 is none (the animation's own colors); "color" is made from Params::color.
+struct PaletteInfo {
+    const char *slug;
+    const char *name;
+};
+
+size_t palette_count();
+// nullptr for an index from palette_count() on
+const PaletteInfo *palette_info(size_t index);
+// the index of `slug`, palette_count() when there is none
+size_t find_palette(const char *slug);
+// the color at `index` (0..255 once around) of palette `palette`; `color` for the "color" palette.
+// Palette 0 (none) gives the rainbow.
+Rgb palette_color(uint8_t palette, uint8_t index, Rgb color);
 
 // The memory a canvas of `width` x `height` needs for every animation (Canvas::memory).
 size_t memory_size(uint16_t width, uint16_t height);

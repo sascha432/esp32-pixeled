@@ -108,8 +108,10 @@ outputs, `mqtt` and `audio` ([leds.md](leds.md), [TODO.md](TODO.md)).
 | `effects` | nothing | yes | The animations: canvas, parameters, time, the memory between frames, the rotation, the audio for the reactive ones ([leds.md](leds.md) section 6) |
 | `leds` | `effects`, `layout`, `output`, `platform` | `frame.cpp` | The render task: state, fade, gamma, power limit, the supply, NVS ([leds.md](leds.md) section 3) |
 | `audio` | `effects`, `platform`, `webserver` | `analysis.cpp` | The I2S microphone: its task, the FFT, bands, gain and beat, its settings (NVS) and `/api/audio`; the render task takes the result with each frame ([leds.md](leds.md) section 6.1) |
-| `leds_api` | `leds`, `webserver` | no | `/api/leds`, registered by main through `webserver::Config::add_routes`; the live socket gets the sound through a getter from main, not from `audio` |
-| `hass` | `espressif/mqtt`, `cjson`, `leds`, `webserver` | no | Home Assistant over MQTT: connection, discovery, commands, state; `/api/mqtt` ([leds.md](leds.md) section 8) |
+| `presets` | `leds`, `effects`, `platform` | no | The presets: the light under a name, on LittleFS (`/fs/presets.bin`), applied through the render task's commands ([leds.md](leds.md) section 10) |
+| `leds_api` | `leds`, `presets`, `webserver` | no | `/api/leds` and `/api/presets`, registered by main through `webserver::Config::add_routes`; the live socket gets the sound through a getter from main, not from `audio` |
+| `hass` | `espressif/mqtt`, `cjson`, `leds`, `presets`, `webserver` | no | Home Assistant over MQTT: connection, discovery, commands, state; `/api/mqtt` ([leds.md](leds.md) section 8) |
+| `input` | GPIO, PCNT, `platform`, `webserver` | `button.cpp` | Buttons and a rotary encoder: events, their actions (settings), `/api/input`; the actions go to a handler in main (section 9.6) |
 | `relay`, `motion`, `light_sensor` | GPIO, I2C, ADC drivers | no | Optional hardware (section 9.6) |
 | `logbuf`, `devconsole` | `log`, `console` | no | The web UI's log, the serial console |
 | `main` | everything | no | `app_main`: start order, the function tables between the components, error policy at boot |
@@ -216,9 +218,30 @@ fits every wiring of a board (not built: `main` uses the board's pins as they ar
 * **After setup**: the hotspot stays on, still open, for 15 minutes after the first connection,
   so the phone can see the result, then turns off unless the user chose to keep it on (from then
   on with the password).
-* **No network**: while no network is saved the hotspot is on. A device whose saved networks are
-  all out of reach turns the hotspot on (not built: the rule for a headless device, see
-  [TODO.md](TODO.md)).
+* **No network**: while no network is saved the hotspot is on.
+* **Headless recovery** (built 2026-10-21): a device with saved networks that has had no
+  connection for 5 minutes (`network::kOfflineHotspotMs`: the networks out of reach, a changed
+  password) opens the hotspot with its password, and keeps trying its networks. The board's
+  hotspot button (`Info::hotspot_button`, button 1 unless the board names another) held while the
+  device starts (2 s; `main`, `network::open_hotspot`) opens it without a password, as in the first
+  setup: whoever holds the button is at the device.
+  * WLED controller rev 1.1 (the test board): button 4 (BTN3, GPIO 19). Hold it, press the reset
+    button (BTN0, the EN line), keep it down 2 s more; or hold it while the power comes on.
+  * WLED controller rev 1.3: button 1 (BTN0, GPIO 13, no strapping pin; the board has no reset
+    button): held 3 s it restarts the device, kept down through the restart it opens the hotspot.
+  * Espressif dev kits: button 1 is BOOT (a strapping pin: held through a reset the chip waits for
+    a download), so it is pressed right after the reset, within about 0.8 s (the check runs then
+    on the ESP32).
+
+  Both stay
+  on until 15 minutes after the next connection, then the hotspot goes off (unless kept on).
+  Console `hotspot open` does what the button does. The open hotspot was tried on the test board
+  2026-10-21 with the console (on, open, off in 15 minutes); the button (BTN3 with the reset, rev
+  1.1) by the user 2026-10-22; the 5 minutes offline with `wifi pause 400` 2026-10-22 (the
+  hotspot came after 300 s with its password, stayed 15 minutes after the reconnect). The hotspot of a device without Wi-Fi
+  always takes the password: an open time left from a button or a setup ends when it opens (only a
+  first setup that never connected stays open). Console `wifi pause <s>` drops the Wi-Fi for a
+  while, as if the networks were gone, to try it without the router.
 * **Up to 5 networks**, added on the web UI's Wi-Fi page.
 * **Hotspot and station run at the same time** whenever the hotspot is on. A phone on the hotspot
   may lose its connection for a moment when the station connects or changes channel.
@@ -268,7 +291,7 @@ fits every wiring of a board (not built: `main` uses the board's pins as they ar
   | Kind of value | Written | Examples |
   | --- | --- | --- |
   | changed by a live control or by using the device, in bursts | `platform::set_blob_later`: 10 s after the last change, at most 60 s after the first, and at a restart | `leds/state` (on, brightness, animation, color, speed), `leds/styles` (rotation, reactive, strength, attack, release; sliders and Home Assistant numbers) |
-  | saved by an explicit action (Save, a form), or a secret | at once, with commit; a failure is reported | Wi-Fi networks, policy and hotspot, web UI login, MQTT settings and password, time zone and SNTP servers, LED layout, config, lanes, overlay, auto off, audio settings and inputs |
+  | saved by an explicit action (Save, a form), or a secret | at once, with commit; a failure is reported | Wi-Fi networks, policy and hotspot, web UI login, MQTT settings and password, time zone and SNTP servers, LED layout, config, lanes, overlay, auto off, audio settings and inputs, the buttons' actions; the presets (a file) |
   | device state that changes rarely | at once, when it changed | `leds/boot` (switched off by motion), `network/last_seen` |
   | developer and calibration | at once | console log level, `logbuf/debug`, the light sensor |
 
@@ -282,7 +305,8 @@ fits every wiring of a board (not built: `main` uses the board's pins as they ar
   (`config::backup::Part`). The sections come from a table filled in `main/backup.cpp`; each
   writes its fields and reads them back. An import is checked completely first and applied only
   when no section found a problem. Never a password in an export; an import may carry them,
-  added by hand. Built sections: `network`, `leds`, `audio`, `mqtt`, `time`, `webui` (import only).
+  added by hand. Built sections: `network`, `leds`, `audio`, `mqtt`, `time`, `input`, `webui`
+  (import only); `presets` in the presets part.
 * **Logs** are viewable in the web UI (`logbuf`): errors and warnings always, info messages as
   well in the debug mode (stored).
 
@@ -294,11 +318,12 @@ fits every wiring of a board (not built: `main` uses the board's pins as they ar
 | `network` | the station and hotspot state machine of sections 9.1 and 9.2, up to 5 stored networks, the hotspot password, scan results, stored in the settings NVS. One task owns the driver and the state; commands are queued, readers get copies (`status()`). Files: `network.cpp` (the state, the task, start), `station.cpp` (scan, connect, retry, roam), `commands.cpp` (the saved networks), `api.cpp` (the calls of other tasks). mDNS: the device answers as `<device name>.local` and announces `_http._tcp`, in both apps |
 | `webserver` | captive portal DNS and redirect, the status API and the built-in page, the setup pages, login, Wi-Fi, hotspot, update, files, log and backup API, the time API (`register_time_routes`, registered by `main` only). Serves the web files from LittleFS, with a recovery page compiled in that works without the file system ([ui/web/web-recovery.md](ui/web/web-recovery.md)). `Config::add_routes` lets `main` register more routes (the LED, audio, MQTT and time API). Routes are made with `detail::route()` (the main firmware has WebSocket support, `CONFIG_HTTPD_WS_SUPPORT`, which adds fields to `httpd_uri_t`) |
 | `ota` | firmware and file system images from an upload, a tool or a URL download, app rollback ([ui/web/web-app.md](ui/web/web-app.md) section 5), restart into the recovery app and back, partition layout of section 9.5 |
-| `devconsole` | serial command line for development (`CONFIG_PX_DEV_CONSOLE`): Wi-Fi networks, hotspot, file system, memory, log level, light sensor, relay, motion sensor, audio, LEDs, restart, factory reset, a crash on purpose (`crash yes`) (`help` lists them) |
+| `devconsole` | serial command line for development (`CONFIG_PX_DEV_CONSOLE`): Wi-Fi networks, hotspot (`hotspot open` as the button at boot), file system, memory, log level, light sensor, relay, motion sensor, audio, LEDs (palette, presets), buttons (`input`), MQTT (`mqtt`, its settings without the password), restart, factory reset, a crash on purpose (`crash yes`) (`help` lists them) |
 | `logbuf` | the log in a ring buffer for the web UI's log page |
 | `relay` | relays on GPIOs: the LED power supply (section 9.6) |
 | `motion` | a motion sensor on a GPIO (section 9.6) |
 | `light_sensor` | ambient light: a BH1750 on the board's I2C bus or an LDR on an ADC1 pin (section 9.6) |
+| `input` | buttons and a rotary encoder (section 9.6) |
 
 ### 9.5 Partition layout and the recovery app
 
@@ -361,8 +386,13 @@ one that is not fitted or does not answer is logged and left out.
   brightness (not built). Console `light` shows and calibrates it.
 * **Microphone** (`audio`): an INMP441 on the board's `mic_sck_gpio`, `mic_ws_gpio` and
   `mic_sd_gpio` (I2S1 on the ESP32). Console `audio` shows its analysis.
-* Buttons, a rotary encoder and a temperature sensor are planned
-  ([leds.md](leds.md) section 9).
+* **Buttons and a rotary encoder** (`input`, `Info::button_gpios` (up to 4, button 1 the board's
+  own; -1 for one that is not there), `hotspot_button`, `encoder_a_gpio`, `encoder_b_gpio`,
+  `encoder_button_gpio`): an esp_timer samples them
+  every 10 ms; clicks, double clicks and holds become actions, which `main` maps to the LEDs, the
+  presets, the hotspot and the restart ([leds.md](leds.md) section 9). The encoder is counted by
+  the PCNT, by GPIO interrupts on the C3. Console `input` shows them.
+* A temperature sensor is planned ([leds.md](leds.md) section 9).
 
 ---
 

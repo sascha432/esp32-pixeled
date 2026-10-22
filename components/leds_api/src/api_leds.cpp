@@ -1,12 +1,13 @@
 // The LEDs in the web API (docs/ui/web/web-app.md section 4), login required:
 //
-//   GET  /api/leds            the state, the status of the render task, the animations, the config,
-//                             the overlay
+//   GET  /api/leds            the state, the status of the render task, the animations, the
+//                             palettes, the config, the overlay
 //   POST /api/leds            any of on=1|0, brightness=0..255, effect=<slug>, color=#rrggbb,
 //                             speed=0..255, auto_off=1|0, auto_off_minutes=1..240, and for the
 //                             animation (the one given, else the current one) rotation=0|90|180|270,
-//                             reactive=1|0, strength=0..255, attack=0..2000 and release=0..5000
-//                             (ms); answers like GET
+//                             reactive=1|0, strength=0..255, attack=0..2000, release=0..5000 (ms) and
+//                             palette=<slug>; answers like GET
+//   GET  /api/presets, POST /api/presets/save|apply|delete: api_presets.cpp
 //   GET  /api/leds/layout     {"width", "height", "available_lanes", "panels": [{"lane", "x", "y",
 //                             "width", "height", "first": "tl|tr|bl|br", "runs": "rows|columns",
 //                             "zigzag"}]}
@@ -46,6 +47,8 @@
 #include "px/leds/leds.hpp"
 #include "px/memory/large.hpp"
 #include "px/webserver/http.hpp"
+
+#include "api_presets.hpp"
 
 namespace px::leds_api {
 
@@ -138,6 +141,8 @@ esp_err_t send_state(httpd_req_t *req)
         .number("strength", s.style.strength)
         .number("attack", s.style.attack_ms)
         .number("release", s.style.release_ms)
+        .string("palette", effects::palette_info(s.style.palette) != nullptr ? effects::palette_info(s.style.palette)->slug
+                                                                              : "none")
         .begin_object("audio")
         .boolean("source", s.has_audio)
         .boolean("hears", s.hears_audio)
@@ -169,9 +174,17 @@ esp_err_t send_state(httpd_req_t *req)
             .string("slug", e->slug)
             .string("name", e->name)
             .boolean("color", e->uses_color)
+            .boolean("palette", e->uses_palette)
             .string("reactive", e->reactive == effects::Reactive::Never      ? "never"
                                 : e->reactive == effects::Reactive::Optional ? "optional"
                                                                               : "required")
+            .end_object();
+    }
+    json.end_array().begin_array("palettes");
+    for (size_t i = 0; i < effects::palette_count(); i++) {
+        json.begin_object()
+            .string("slug", effects::palette_info(i)->slug)
+            .string("name", effects::palette_info(i)->name)
             .end_object();
     }
     json.end_array()
@@ -248,6 +261,12 @@ esp_err_t post_leds(httpd_req_t *req)
             return send_error(req, "400 Bad Request", "effect: not an animation of this firmware");
         }
     }
+    size_t palette = effects::palette_count();
+    const bool has_palette = form_has(body, "palette");
+    if (has_palette &&
+        (!form_value(body, "palette", text, sizeof(text)) || (palette = effects::find_palette(text)) >= effects::palette_count())) {
+        return send_error(req, "400 Bad Request", "palette: not a palette of this firmware");
+    }
     effects::Rgb color{};
     const bool has_color = form_has(body, "color");
     if (has_color && (!form_value(body, "color", text, sizeof(text)) || !parse_color(text, color))) {
@@ -265,7 +284,7 @@ esp_err_t post_leds(httpd_req_t *req)
     if (effect < effects::count()) {
         leds::set_effect(effect);
     }
-    if (has_rotation || has_reactive || has_strength || has_attack || has_release) {
+    if (has_rotation || has_reactive || has_strength || has_attack || has_release || has_palette) {
         const size_t target = effect < effects::count() ? effect : leds::status().state.effect;
         leds::Style style = leds::styles().style[target < leds::kMaxEffects ? target : 0];
         if (has_rotation) {
@@ -282,6 +301,9 @@ esp_err_t post_leds(httpd_req_t *req)
         }
         if (has_release) {
             style.release_ms = static_cast<uint16_t>(release);
+        }
+        if (has_palette) {
+            style.palette = static_cast<uint8_t>(palette);
         }
         leds::set_style(target, style);
     }
@@ -787,6 +809,7 @@ void register_routes(void *server, void (*audio)(effects::Audio &out))
     live_route.ws_pre_handshake_cb = live_pre_handshake;
     live_route.ws_post_handshake_cb = live_post_handshake;
     httpd_register_uri_handler(static_cast<httpd_handle_t>(server), &live_route);
+    register_preset_routes(server);
 }
 
 } // namespace px::leds_api

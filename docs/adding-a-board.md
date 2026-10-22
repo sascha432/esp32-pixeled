@@ -17,7 +17,9 @@ not a new board (section "Variants" below).
 | a motion sensor input and its active level | `Info::motion_gpio`, `motion_active_high` |
 | the I2C pins for sensor modules | `Info::i2c_sda_gpio`, `i2c_scl_gpio` |
 | an LDR on an ADC1 pin | `Info::light_ldr_gpio` |
-| the board's button | `Info::button_gpio` |
+| the board's button and up to 3 more, to GND (-1 for one that is not there: the others keep their number and actions) | `Info::button_gpios` (`buttons({...})`, button 1 the board's own) |
+| the button that, held at boot, opens the hotspot (button 1 unless another suits better, e.g. when button 1 is the reset) | `Info::hotspot_button` (0 is button 1) |
+| a rotary encoder: A, B and its push switch | `Info::encoder_a_gpio`, `encoder_b_gpio`, `encoder_button_gpio` |
 | an I2S microphone (INMP441): clock, word select, data | `Info::mic_sck_gpio`, `mic_ws_gpio`, `mic_sd_gpio` |
 
 ## 2. Files

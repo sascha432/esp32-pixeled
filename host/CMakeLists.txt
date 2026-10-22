@@ -25,6 +25,7 @@ add_executable(px_tests
     tests/check.cpp
     tests/effects_test.cpp
     tests/frame_test.cpp
+    tests/input_test.cpp
     tests/layout_test.cpp
     tests/multipart_test.cpp
     tests/network_test.cpp
@@ -37,6 +38,7 @@ add_executable(px_tests
     ${PX_ROOT}/components/effects/src/effects.cpp
     ${PX_ROOT}/components/effects/src/overlay.cpp
     ${PX_ROOT}/components/formats/src/json_writer.cpp
+    ${PX_ROOT}/components/input/src/button.cpp
     ${PX_ROOT}/components/layout/src/layout.cpp
     ${PX_ROOT}/components/leds/src/frame.cpp
     ${PX_ROOT}/components/formats/src/multipart.cpp
@@ -53,6 +55,7 @@ target_include_directories(px_tests PRIVATE
     ${PX_ROOT}/components/config/include
     ${PX_ROOT}/components/effects/include
     ${PX_ROOT}/components/formats/include
+    ${PX_ROOT}/components/input/src
     ${PX_ROOT}/components/layout/include
     ${PX_ROOT}/components/leds/src
     ${PX_ROOT}/components/memory/include

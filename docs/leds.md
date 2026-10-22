@@ -321,8 +321,9 @@ only on a device with an audio source. Built 2026-10-21:
   (attack, 0 to 2000 ms, default 20) and fall (release, 0 to 5000 ms, default 250); the bands are
   smoothed in the animation's memory. Sliders next to the strength (also for Spectrum, whose bars
   follow them), Home Assistant numbers "Sound attack" and "Sound release", console `leds attack`
-  and `leds release`, backup `attack_ms` and `release_ms`. The stored styles of the version
-  before are kept (NVS key `styles`, version 3, 32 animations).
+  and `leds release`, backup `attack_ms` and `release_ms`. The stored styles of the versions
+  before are kept (NVS key `styles`, version 4 with the palette, 32 animations; version 3 is read
+  with the palette at none).
 
 ### 6.3 The list (a proposal, to be decided)
 
@@ -344,9 +345,31 @@ only on a device with an audio source. Built 2026-10-21:
 | Matrix rain | optional | Built 2026-10-21: drops in the color with a light head and a tail of half the height; with sound each column drops with its band, all on a beat |
 | Spectrum bars | only with audio | color: rainbow, gradient or one color; peaks; VU rows (the three bar animations of `kfc_fw` in one). Built 2026-10-21 as "Spectrum": a rainbow bar per band from the bottom, a narrower canvas shows the loudest band of each group; a dim line while there are no bars |
 
-A shared palette system serves every animation that takes colors (not built). The new
+The animations with colors of their own take a palette instead (section 6.4). The new
 animations of 2026-10-21 are host tested (they draw, move, follow the sound) and timed on the
 host only; how they look on the matrix is open.
+
+### 6.4 Palettes
+
+Built 2026-10-21 (`px/effects/effects.hpp`, host tested). A palette is 16 colors once around a
+circle; the colors between two of them are blended, the last into the first. The animations that
+draw from the hue circle (rainbow, plasma, color fade, noise, ripple, spectrum) take the
+palette's color at the same place instead; fire takes it for its heat, from dark at no heat.
+Solid, breathe, gradient, twinkle, meteor and matrix rain show the color and take none.
+
+| Palette | Colors |
+| --- | --- |
+| none ("Its own colors", the default) | the animation as built: the hue circle, fire's black-red-yellow-white |
+| rainbow | the hue circle (the same as none for most) |
+| party, ocean, forest, lava, heat, cloud | the colors of FastLED's palettes of these names |
+| sunset | dark red, orange, yellow, pink, purple, dark blue and back |
+| pastel | the hue circle at little saturation |
+| color ("Shades of the color") | the color, down to a quarter of it in the middle and back |
+
+The palette is part of each animation's style (`leds::Style::palette`, section 6.2), kept per
+animation like the rotation: the LEDs page's select (shown for an animation that takes one), Home
+Assistant select "Palette", console `leds palette <slug>`, backup `palette` in
+`leds.animations` and in the presets. The index is stored: a new palette goes at the end.
 
 ---
 
@@ -377,8 +400,13 @@ publishes what changed; the sensors every 30 s. Commands go to the render task.
 | switch | `auto_off/set`, `auto_off/state` | motion auto off, with a sensor (config) | yes |
 | number | `auto_off_minutes/set`, `auto_off_minutes/state` | minutes after the sensor clears, 1 to 240 (config) | yes |
 | button | `restart` | restart | yes |
-| select | | palette, preset, playlist | no |
-| number | | intensity, transition time | no |
+| select | `palette/set`, `palette/state` | the current animation's palette, by name (section 6.4) | yes |
+| select | `preset/set`, `preset/state` | the presets by name; the state is the one the light matches, `None` (unknown) when none does; announced again when the list changes, removed while there is none | yes |
+| select | | playlist | no |
+| number | `transition/set`, `transition/state` | "Transition": the fade time of on, off and the brightness, 0 to 10000 ms (config) | yes |
+| number | `crossfade/set`, `crossfade/state` | "Crossfade" between animations, 0 to 10000 ms (config) | yes |
+| switch | `dither/set`, `dither/state` | "Dithering" (config) | yes |
+| number | | intensity | no |
 | select | `rotation/set`, `rotation/state` | the current animation's rotation: 0, 90, 180, 270 | yes |
 | switch | `reactive/set`, `reactive/state` | "Reacts to sound", the current animation's switch, with an audio source (announced again, or removed, when a UDP input is switched on or off; Spectrum is in the effect list only with a source) | yes |
 | number | `strength/set`, `strength/state` | "Sound strength", the current animation's, 0 to 255, with an audio source | yes |
@@ -388,6 +416,12 @@ publishes what changed; the sensors every 30 s. Commands go to the render task.
 | text | `overlay_text/set`, `overlay_text/state` | the overlay text, 63 bytes | yes |
 | number | `attack/set`, `release/set` and `/state` | "Sound attack" and "Sound release", the current animation's, ms, with an audio source | yes |
 | select | `power_on/set`, `power_on/state` | at power on: restore, off, on (config) | yes |
+
+The light takes Home Assistant's `transition` (seconds): the brightness and on/off of that command
+go from where the light is to the new value in that time (at most 5 minutes) instead of the fade
+time (`leds::set_transition`). Tried on the test matrix 2026-10-21 under a separate discovery prefix:
+every entity announced, palette, preset, transition, crossfade, dithering and a 4 s transition
+work; not yet seen in Home Assistant itself.
 
 ---
 
@@ -406,11 +440,44 @@ settings (section 8.1 there).
   next motion. The first build had a second countdown after the
   sensor's fixed 5 min hold (from the hassctrl base), so the LEDs went off 5 + N minutes after
   the last motion; dropped 2026-10-20.
-* **Buttons**: click, long press and hold, each with an action (on/off, next animation, next
-  preset, brightness, restart). Holding a button for 3 s restarts the device (the `kfc_fw`
-  behavior; the controller PCB has no reset button). Holding the board's button at boot opens the
-  hotspot (TODO).
-* **Rotary encoder** (PCNT): brightness with acceleration; a push switches to the animation.
+* **Buttons** (built 2026-10-21, `components/input`): up to 4 push buttons to GND
+  (`board::Info::button_gpios`, the internal pull-up where the pin has one), sampled every 10 ms
+  by an esp_timer, debounced (30 ms). Each has an action for a click, a double click and a hold:
+  nothing, on / off, next or previous animation (without the test patterns and, without a
+  source, Spectrum), next preset, brighter, darker (about a sixteenth of the brightness a step;
+  brighter switches on), restart, open the hotspot, "Knob: animations". A hold acts after 0.6 s,
+  brighter and darker repeat every 0.1 s while held, a restart needs 3 s (the `kfc_fw` behavior;
+  the controller PCB has no reset button); without a hold action any press is a click; with a
+  double click action a click waits 0.3 s for the second press. The defaults, made for the WLED
+  controller (a button the board does not have stays empty, the others keep their number):
+
+  | Button | Controller rev 1.3 | Rev 1.1 (the test board) | Click | Double click | Hold |
+  | --- | --- | --- | --- | --- | --- |
+  | 1 | GPIO 13, BTN0 | none: BTN0 is the reset (EN) | next animation | - | restart (3 s) |
+  | 2 | GPIO 35, BTN1 | GPIO 35, BTN1 | darker | - | darker, repeating |
+  | 3 | GPIO 34, BTN2 | GPIO 34, BTN2 | brighter | - | brighter, repeating |
+  | 4 | GPIO 19, BTN3 | GPIO 19, BTN3 | on / off | - | next preset |
+  | encoder push | not fitted | not fitted | on / off | next preset | knob: animations |
+
+  Rev 1.3 has a 10k pull-up and 100 nF on each button; rev 1.1's GPIOs are taken from rev 1.3 and
+  to be checked.
+
+  Settings `input/settings` (written at once), the LEDs page card "Buttons",
+  `GET/POST /api/input`, backup section `input`, console `input`. The state machine is host tested
+  (`host/tests/input_test.cpp`). The board's hotspot button (`board::Info::hotspot_button`,
+  button 1 unless the board says otherwise; button 4, BTN3, on the rev 1.1 test board) held while
+  the device starts (2 s, checked in `main` before the network starts) opens the hotspot without
+  a password ([architecture.md](architecture.md) section 9.1); on a board whose button 1 restarts
+  after 3 s, holding it on does the same. On the test board (rev 1.1) 2026-10-22 by the user:
+  darker, brighter, on/off and the hotspot with BTN3 and the reset work; the rest of the test
+  steps are in [TODO.md](TODO.md).
+* **Rotary encoder** (built 2026-10-21, not tried: none is wired): A and B
+  (`board::Info::encoder_a_gpio`, `encoder_b_gpio`, to GND at the detents, pull-ups) counted by
+  the PCNT in full quadrature (4 counts a detent, a 1 us glitch filter), on the C3 (no PCNT) by
+  GPIO interrupts. Turning changes the brightness, 4 steps a detent when turned fast (a detent
+  within 40 ms), 2 within 100 ms; after the action "Knob: animations" it changes the animation, a
+  detent each, until it rests for 10 s. Its push switch (`encoder_button_gpio`) is a button like
+  the others: on / off, twice the next preset, held the knob for the animations.
 * **Light sensor**: automatic brightness.
 * **Temperature sensor**: section 5.
 * **I2S microphone**: section 6.1.
@@ -419,8 +486,15 @@ settings (section 8.1 there).
 
 ## 10. Presets, playlists, overlay
 
-* **Preset**: an animation with its parameters and the brightness, stored on LittleFS, part of the
-  backup's presets part.
+* **Preset** (built 2026-10-21, `components/presets`): the light under a name (up to 31 bytes),
+  up to 16: the animation, color, speed, brightness and the animation's style (rotation, sound,
+  palette). Stored on LittleFS (`/fs/presets.bin`, written beside it and renamed, so a power cut
+  keeps the old or the new list; `tools/build_fs.py -p` keeps it), at once with every change.
+  Showing one sets all of that and switches the LEDs on. The preset the light matches is found by
+  comparing (so a change of the brightness leaves it). LEDs page card "Presets",
+  `GET /api/presets` and `POST /api/presets/save|apply|delete`, Home Assistant select "Preset",
+  the button action "next preset", console `leds preset [<name>|next|save <name>|delete <name>]`,
+  the backup's presets part (section `presets`).
 * **Playlist**: presets with a time each, cycled.
 * **Text and clock overlay** (built 2026-10-21, `px/effects/overlay.hpp`, host tested): a 5 x 7
   font, proportional, ASCII and the German letters (UTF-8), drawn over any animation in its own
@@ -440,10 +514,12 @@ settings (section 8.1 there).
    ESP32 I2S, S3 LCD_CAM, PARLIO.
 3. Render task, layout and its lookup table, brightness, gamma, power limit, test pattern, the
    layout page of the web UI (done, 2026-10-19).
-4. Animations, palettes, crossfade, presets and playlists.
+4. Animations, palettes, crossfade, presets (palettes and presets built 2026-10-21) and
+   playlists.
 5. MQTT and Home Assistant discovery.
 6. Audio: microphone (built 2026-10-21 with the spectrum), WARLS, WLED audio sync (built
    2026-10-21); reactivity.
-7. Optional hardware: buttons, encoder, motion, power switch, light, temperature.
+7. Optional hardware: buttons and encoder (built 2026-10-21), motion, power switch, light,
+   temperature.
 8. Realtime input, live preview over a WebSocket and text and clock overlay (built
    2026-10-21), custom shapes.

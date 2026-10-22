@@ -26,7 +26,7 @@ constexpr Info kInfo = variant::apply(Info{
     .i2c_sda_gpio = 8,
     .i2c_scl_gpio = 9,
     .light_ldr_gpio = 1,
-    .button_gpio = 0,
+    .button_gpios = buttons({0}),
 });
 // the image tag at the top of this file names the board the same way
 static_assert(std::string_view(kInfo.name) == std::string_view(px_image_tag.board));

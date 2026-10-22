@@ -482,7 +482,9 @@ const views = {
           ["Name", esc(h.ssid)], ["Password", (h.open ? "none during the setup, then " : "") + `<code>${esc(h.password)}</code>`], ["Devices", h.clients],
         ])}
         <div class="d-flex justify-content-end mt-3"><button id="new-password" class="btn btn-outline-secondary" type="button">New password</button></div>`) +
-        '<p class="small text-body-secondary">The hotspot is on by itself while no Wi-Fi is set up and for 15 minutes after the setup.</p>';
+        '<p class="small text-body-secondary">The hotspot is on by itself while no Wi-Fi is set up and for 15 minutes after the setup. ' +
+        "A device that has no Wi-Fi for 5 minutes opens it too (with the password), and the hotspot button (Buttons on the LEDs page) held while the device starts " +
+        "opens it without one; both stay until 15 minutes after the Wi-Fi is back.</p>";
       $("#hotspot-on").onchange = (event) => api("/api/hotspot", { on: event.target.checked ? "1" : "0" })
         .then(() => sleep(500)).then(draw, (e) => toast(e.message, "danger"));
       $("#new-password").onclick = (e) => busy(e.target, async () => {

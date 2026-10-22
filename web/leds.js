@@ -9,7 +9,7 @@ window.pxLeds = (() => {
   // ----------------------------------------------------------------------------- the LEDs page
 
   async function leds() {
-    render(`<h1>LEDs</h1><div id="leds-live"></div><div id="leds-control">Loading ...</div><div id="leds-overlay"></div><div id="leds-motion"></div><div id="leds-audio"></div><div id="leds-config"></div>`);
+    render(`<h1>LEDs</h1><div id="leds-live"></div><div id="leds-control">Loading ...</div><div id="leds-presets"></div><div id="leds-overlay"></div><div id="leds-motion"></div><div id="leds-buttons"></div><div id="leds-audio"></div><div id="leds-config"></div>`);
     let s = await api("/api/leds");
 
     const statusFacts = () => facts([
@@ -37,6 +37,12 @@ window.pxLeds = (() => {
       <select id="leds-effect" class="form-select mb-3">
         ${s.effects.filter(listed).map((e) => `<option value="${esc(e.slug)}" ${e.slug === s.effect ? "selected" : ""}>${esc(e.name)}</option>`).join("")}
       </select>
+      <div id="leds-palette-row" class="mb-3">
+        <label class="form-label" for="leds-palette">Palette</label>
+        <select id="leds-palette" class="form-select">
+          ${s.palettes.map((p) => `<option value="${esc(p.slug)}">${esc(p.name)}</option>`).join("")}
+        </select>
+      </div>
       <div id="leds-color-row" class="mb-3">
         <label class="form-label" for="leds-color">Color</label>
         <input id="leds-color" type="color" class="form-control form-control-color" value="${esc(s.color)}">
@@ -65,15 +71,22 @@ window.pxLeds = (() => {
         <div class="form-text mb-2">How fast it follows a louder sound (attack) and lets go when it gets quieter (release):
           20 and 250 ms as built; a long release lets the bars and the light fall slowly.</div>
       </div>
-      <div class="form-text mb-3">Rotation and the sound settings are kept for each animation.</div>
+      <div class="form-text mb-3">Rotation, palette and the sound settings are kept for each animation.</div>
       <div id="leds-status">${statusFacts()}</div>`);
 
-    const showColor = () => ($("#leds-color-row").hidden = !effectOf($("#leds-effect").value).color);
+    // the color for an animation that shows it, or with the palette made from it
+    const showColor = () => {
+      const effect = effectOf($("#leds-effect").value);
+      $("#leds-palette-row").hidden = !effect.palette;
+      $("#leds-color-row").hidden = !effect.color && !(effect.palette && s.palette === "color");
+    };
     showColor();
     // the current animation's rotation and sound switch; the switch only for one that can react,
     // with an audio source
     const showStyle = () => {
       $("#leds-rotation").value = String(s.rotation);
+      $("#leds-palette").value = s.palette;
+      showColor();
       $("#leds-reactive").checked = s.reactive;
       const reactive = effectOf(s.effect).reactive;
       const canReact = s.audio.source && reactive === "optional";
@@ -89,11 +102,14 @@ window.pxLeds = (() => {
       }
     };
     showStyle();
+    // the presets card follows the light (the preset it matches); drawn further down
+    let presets = { update: async () => {} };
     const send = (form) => api("/api/leds", form).then((answer) => {
       s = answer;
       showStyle();
       $("#leds-status").innerHTML = statusFacts();
       if ($("#motion-status")) $("#motion-status").innerHTML = motionFacts();
+      presets.update();
     }).catch((e) => toast(e.message, "danger"));
     // a slider sends while it moves, at most every 150 ms, and once more where it stops
     const slider = (id, key) => {
@@ -115,6 +131,20 @@ window.pxLeds = (() => {
     overlayCard(s, (answer) => { s = answer; });
     $("#leds-color").oninput = (e) => send({ color: e.target.value });
     $("#leds-rotation").onchange = (e) => send({ rotation: e.target.value });
+    $("#leds-palette").onchange = (e) => send({ palette: e.target.value });
+    // a preset sets the whole light: the card's controls follow
+    presets = await presetCard((answer) => {
+      s = answer;
+      $("#leds-on").checked = s.on;
+      for (const key of ["brightness", "speed"]) {
+        $(`#leds-${key}`).value = String(s[key]);
+        $(`#leds-${key}-value`).textContent = s[key];
+      }
+      $("#leds-effect").value = s.effect;
+      $("#leds-color").value = s.color;
+      showStyle();
+    });
+    await buttonCard();
     $("#leds-reactive").onchange = (e) => send({ reactive: e.target.checked ? "1" : "0" });
 
     // motion auto off: only with a sensor
@@ -203,6 +233,7 @@ window.pxLeds = (() => {
       if (tick++ % 4 !== 0) return;
       if (mic) await mic.update();
       s = await api("/api/leds");
+      await presets.update();
       const box = $("#leds-status");
       if (box) box.innerHTML = statusFacts();
       const motion = $("#motion-status");
@@ -328,6 +359,98 @@ window.pxLeds = (() => {
         drawFacts();
       },
     };
+  }
+
+  // The card "Presets": the saved lights, shown with a click, and the light as it is now saved
+  // under a name. `applied` takes the LED state after a preset was shown. Returns { update } for
+  // after a change of the light (the preset it matches).
+  async function presetCard(applied) {
+    let p = await api("/api/presets");
+    const draw = () => {
+      const rows = p.presets.map((preset, i) => `
+        <li class="list-group-item d-flex align-items-center gap-2">
+          <span class="rounded border" style="width:1.2em;height:1.2em;background:${esc(preset.color)}"></span>
+          <span class="flex-grow-1 text-truncate">${esc(preset.name)}
+            ${i === p.current ? '<span class="badge text-bg-primary ms-1">shown</span>' : ""}</span>
+          <button class="btn btn-sm btn-outline-primary" data-apply="${i}">Show</button>
+          <button class="btn btn-sm btn-outline-danger" data-delete="${i}">Delete</button>
+        </li>`).join("");
+      $("#leds-presets").innerHTML = card(`Presets (${p.presets.length} of ${p.max})`, `
+        <ul class="list-group mb-3">${rows || '<li class="list-group-item text-body-secondary">none yet</li>'}</ul>
+        <form id="preset-form" class="d-flex gap-2">
+          <input id="preset-name" class="form-control" maxlength="31" placeholder="name" required>
+          <button class="btn btn-primary text-nowrap" type="submit">Save the light</button>
+        </form>
+        <div class="form-text mt-2">A preset keeps the animation with its color, speed, brightness, rotation, palette and
+          sound settings. Saving under a name that is there replaces it. Home Assistant lists them as "Preset".</div>`);
+      $("#leds-presets ul").onclick = (event) => {
+        const b = event.target.closest("button");
+        if (!b) return;
+        busy(b, async () => {
+          if (b.dataset.delete !== undefined) {
+            const name = p.presets[Number(b.dataset.delete)].name;
+            if (!confirm(`Delete the preset ${name}?`)) return;
+            p = await api("/api/presets/delete", { index: b.dataset.delete });
+          } else {
+            p = await api("/api/presets/apply", { index: b.dataset.apply });
+            applied(await api("/api/leds"));
+          }
+          draw();
+        });
+      };
+      $("#preset-form").onsubmit = (e) => {
+        e.preventDefault();
+        busy(e.submitter || $("#preset-form button"), async () => {
+          p = await api("/api/presets/save", { name: $("#preset-name").value.trim() });
+          toast("saved", "success");
+          draw();
+        });
+      };
+    };
+    draw();
+    return {
+      update: async () => {
+        const before = p.current;
+        p = await api("/api/presets");
+        if (p.current !== before && !$("#leds-presets").contains(document.activeElement)) draw();
+      },
+    };
+  }
+
+  // The card "Buttons": what each button of the board and the encoder's push do; only with any.
+  async function buttonCard() {
+    let b;
+    try {
+      b = await api("/api/input");
+    } catch (e) {
+      return;
+    }
+    if (!b.buttons.length && !b.encoder) return;
+    const select = (key, value) => `<select class="form-select form-select-sm" data-key="${key}">
+      ${b.actions.map((a) => `<option value="${esc(a.slug)}" ${a.slug === value ? "selected" : ""}>${esc(a.name)}</option>`).join("")}
+      </select>`;
+    const row = (id, title, item) => `<tr data-button="${id}">
+      <td class="text-nowrap">${esc(title)}</td>
+      <td>${select("click", item.click)}</td><td>${select("double", item.double)}</td><td>${select("hold", item.hold)}</td></tr>`;
+    const e = b.encoder;
+    const hotspot = b.buttons.find((item) => item.hotspot);
+    $("#leds-buttons").innerHTML = card("Buttons", `
+      <div class="table-responsive"><table class="table table-sm align-middle mb-2">
+        <thead><tr><th>Button</th><th>Click</th><th>Double click</th><th>Hold</th></tr></thead>
+        <tbody>${b.buttons.map((item) => row(item.button, `${item.button} (GPIO ${item.gpio})`, item)).join("")}
+          ${e && e.button >= 0 ? row("encoder", `Encoder push (GPIO ${e.button})`, e) : ""}</tbody></table></div>
+      ${e && e.a >= 0 ? `<p class="small mb-2">Encoder on GPIO ${e.a} and ${e.b}: turning changes the brightness (faster
+        when turned fast); after the action "Knob: animations" it changes the animation until it rests for 10 s.</p>` : ""}
+      <div class="form-text">A hold acts after 0.6 s; brighter and darker repeat while held; a restart needs 3 s.
+        ${hotspot ? `Button ${hotspot.button} held while the device starts (after a reset or at power on) opens the hotspot
+        without a password, for a device whose Wi-Fi is gone. ` : ""}A double click delays the click by 0.3 s.</div>`);
+    document.querySelectorAll("#leds-buttons [data-key]").forEach((input) => {
+      input.onchange = () => {
+        const button = input.closest("[data-button]").dataset.button;
+        api("/api/input", { button, [input.dataset.key]: input.value })
+          .then((answer) => { b = answer; toast("saved", "success"); }, (err) => toast(err.message, "danger"));
+      };
+    });
   }
 
   // The card "Overlay": text or the clock over every animation. `update` takes the answer.

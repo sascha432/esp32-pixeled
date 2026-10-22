@@ -177,6 +177,24 @@ void cmd_import(const ImportJob &job)
     }
 }
 
+void cmd_pause(uint32_t seconds)
+{
+    // as if every saved network were gone: no attempt until the time is over (the offline hotspot
+    // can be tried without the router)
+    const bool up = t.status.state == StaState::Connected || t.status.state == StaState::Connecting;
+    if (t.scan == ScanPurpose::Connect) {
+        t.scan = ScanPurpose::User; // its result connects nothing
+    }
+    t.status.state = StaState::WaitingToRetry;
+    t.status.ip[0] = 0;
+    t.retry_at = now() + pdMS_TO_TICKS(seconds * 1000);
+    set_error("Wi-Fi paused by the console");
+    if (up) {
+        esp_wifi_disconnect();
+    }
+    ESP_LOGW(kTag, "Wi-Fi paused for %lu s", static_cast<unsigned long>(seconds));
+}
+
 void cmd_reconnect()
 {
     reset_round();

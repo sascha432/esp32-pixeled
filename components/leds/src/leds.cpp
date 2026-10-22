@@ -68,6 +68,18 @@ struct StylesV2 {
     } style[16];
 };
 
+// version 3: the same size as 4, the palette in what was padding
+struct StylesV3 {
+    uint8_t version;
+    struct {
+        uint8_t rotation;
+        bool reactive;
+        uint8_t strength;
+        uint16_t attack_ms;
+        uint16_t release_ms;
+    } style[kMaxEffects];
+};
+
 enum class MsgType : uint8_t {
     On,
     Brightness,
@@ -82,6 +94,10 @@ enum class MsgType : uint8_t {
     Suspend,
     Style,
     Overlay,
+    Transition,
+    Toggle,
+    StepBrightness,
+    StepEffect,
 };
 
 struct Msg {
@@ -127,6 +143,10 @@ struct Task {
     bool suspended = false;
     // the fade: the level in 1/256 steps
     uint32_t level = 0;
+    // a transition instead of the fade (set_transition): its time, -1 none, and the way from the
+    // level to the target when it started (0 until the first frame)
+    int32_t transition_ms = -1;
+    uint32_t transition_span = 0;
     bool supply_on = false;
     int64_t settle_until_us = 0;
     // a dark frame is out since the level reached 0
@@ -274,9 +294,22 @@ void load_config_and_styles()
         save(kKeyStyles, t.styles);
         ESP_LOGI(kTag, "the styles of version 2 taken over");
     }
+    if (StylesV3 old{}; load_old(kKeyStyles, 3, old)) {
+        for (size_t i = 0; i < std::size(old.style); i++) {
+            t.styles.style[i] = {.rotation = static_cast<uint8_t>(old.style[i].rotation & 3),
+                                 .reactive = old.style[i].reactive,
+                                 .strength = old.style[i].strength,
+                                 .palette = 0,
+                                 .attack_ms = old.style[i].attack_ms,
+                                 .release_ms = old.style[i].release_ms};
+        }
+        save(kKeyStyles, t.styles);
+        ESP_LOGI(kTag, "the styles of version 3 taken over");
+    }
     for (Style &style : t.styles.style) {
         style.attack_ms = style.attack_ms > effects::kMaxAttackMs ? Style{}.attack_ms : style.attack_ms;
         style.release_ms = style.release_ms > effects::kMaxReleaseMs ? Style{}.release_ms : style.release_ms;
+        style.palette = style.palette >= effects::palette_count() ? 0 : style.palette;
     }
 }
 
@@ -424,7 +457,8 @@ void draw(uint8_t effect, const Style &style, effects::Rgb *pixels, uint8_t *mem
                                  .reactive = style.reactive,
                                  .strength = style.strength,
                                  .attack_ms = style.attack_ms,
-                                 .release_ms = style.release_ms};
+                                 .release_ms = style.release_ms,
+                                 .palette = style.palette};
     effects::render(effect, canvas, params, ms);
 }
 
@@ -515,11 +549,23 @@ void render_frame(int64_t now_us)
     const uint32_t target = t.state.on ? t.state.brightness * 256u : 0;
     const auto elapsed_ms = static_cast<uint32_t>((now_us - t.last_frame_us) / 1000);
     t.last_frame_us = now_us;
-    const uint32_t step = t.config.fade_ms == 0 ? 65535 : 255u * 256u * elapsed_ms / t.config.fade_ms + 1;
+    uint32_t step = t.config.fade_ms == 0 ? 65535 : 255u * 256u * elapsed_ms / t.config.fade_ms + 1;
+    if (t.transition_ms >= 0) {
+        // the whole way in the transition's time, however far it is
+        if (t.transition_span == 0) {
+            t.transition_span = t.level > target ? t.level - target : target - t.level;
+        }
+        step = t.transition_ms == 0 ? 65535
+                                    : static_cast<uint32_t>(static_cast<uint64_t>(t.transition_span) * elapsed_ms /
+                                                            static_cast<uint32_t>(t.transition_ms)) + 1;
+    }
     if (t.level < target) {
         t.level = t.level + step < target ? t.level + step : target;
     } else if (t.level > target) {
         t.level = t.level > target + step ? t.level - step : target;
+    }
+    if (t.level == target) {
+        t.transition_ms = -1;
     }
 
     if (t.level == 0 && target == 0) {
@@ -617,6 +663,59 @@ void handle(const Msg &msg)
         t.state.speed = static_cast<uint8_t>(msg.value);
         save_state_later();
         break;
+    case MsgType::Transition:
+        t.transition_ms = static_cast<int32_t>(msg.value);
+        t.transition_span = 0;
+        break;
+    case MsgType::Toggle:
+        t.state.on = !t.state.on;
+        set_off_by_motion(false);
+        save_state_later();
+        break;
+    case MsgType::StepBrightness: {
+        const auto steps = static_cast<int32_t>(msg.value);
+        if (!t.state.on) {
+            // up switches on at the brightness it had; down while off does nothing
+            if (steps > 0) {
+                t.state.on = true;
+                set_off_by_motion(false);
+                save_state_later();
+            }
+            break;
+        }
+        int32_t brightness = t.state.brightness;
+        for (int32_t i = 0; i < (steps > 0 ? steps : -steps); i++) {
+            const int32_t step = brightness / 16 + 1;
+            brightness += steps > 0 ? step : -step;
+        }
+        t.state.brightness = static_cast<uint8_t>(brightness < 1 ? 1 : brightness > 255 ? 255 : brightness);
+        save_state_later();
+        break;
+    }
+    case MsgType::StepEffect: {
+        const auto steps = static_cast<int32_t>(msg.value);
+        const size_t count = effects::animation_count() < kMaxEffects ? effects::animation_count() : kMaxEffects;
+        if (count == 0) {
+            break;
+        }
+        const bool audio = has_audio_source();
+        size_t effect = t.state.effect < count ? t.state.effect : 0;
+        for (int32_t i = 0; i < (steps > 0 ? steps : -steps); i++) {
+            // the next one that can be shown here; at most once around
+            for (size_t tries = 0; tries < count; tries++) {
+                effect = steps > 0 ? (effect + 1) % count : (effect + count - 1) % count;
+                if (audio || effects::info(effect)->reactive != effects::Reactive::Required) {
+                    break;
+                }
+            }
+        }
+        if (effect != t.state.effect) {
+            start_crossfade(t.state.effect);
+            t.state.effect = static_cast<uint8_t>(effect);
+            save_state_later();
+        }
+        break;
+    }
     case MsgType::Layout:
         xSemaphoreTake(g_lock, portMAX_DELAY);
         t.layout = g_pending_layout;
@@ -916,12 +1015,33 @@ void set_speed(uint8_t speed)
     post(MsgType::Speed, speed);
 }
 
+void toggle()
+{
+    post(MsgType::Toggle);
+}
+
+void step_brightness(int steps)
+{
+    post(MsgType::StepBrightness, static_cast<uint32_t>(steps));
+}
+
+void step_effect(int steps)
+{
+    post(MsgType::StepEffect, static_cast<uint32_t>(steps));
+}
+
+void set_transition(uint32_t ms)
+{
+    post(MsgType::Transition, ms > kMaxTransitionMs ? kMaxTransitionMs : ms);
+}
+
 void set_style(size_t effect, Style style)
 {
     if (effect >= effects::count() || effect >= kMaxEffects || g_lock == nullptr) {
         return;
     }
     style.rotation &= 3;
+    style.palette = style.palette >= effects::palette_count() ? 0 : style.palette;
     style.attack_ms = style.attack_ms > effects::kMaxAttackMs ? effects::kMaxAttackMs : style.attack_ms;
     style.release_ms = style.release_ms > effects::kMaxReleaseMs ? effects::kMaxReleaseMs : style.release_ms;
     // all styles wait together: several set at once (the backup) are not lost
@@ -976,7 +1096,7 @@ bool set_config(const Config &config, char *error, size_t error_size)
         return false;
     }
     const char *problem = config.fps < 1 || config.fps > 200      ? "fps: 1 to 200"
-                          : config.fade_ms > 10000                ? "fade: 0 to 10000 ms"
+                          : config.fade_ms > kMaxFadeMs           ? "fade: 0 to 10000 ms"
                           : config.settle_ms > 2000               ? "settle time: 0 to 2000 ms"
                           : config.channel_mw < 1 || config.channel_mw > 1000 ? "channel: 1 to 1000 mW"
                           : config.idle_mw > 100                  ? "idle: 0 to 100 mW"

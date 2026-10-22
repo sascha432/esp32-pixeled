@@ -40,7 +40,7 @@ SemaphoreHandle_t g_lock = nullptr;
 
 // copies for other tasks, guarded by g_lock
 Status g_status{};
-TickType_t g_setup_hotspot_until = 0;
+TickType_t g_hotspot_until = 0;
 SavedNetworkInfo g_saved[kMaxNetworks] = {};
 size_t g_saved_count = 0;
 ScanEntry g_scan[kMaxScan] = {};
@@ -86,7 +86,11 @@ void publish()
 
     xSemaphoreTake(g_lock, portMAX_DELAY);
     g_status = t.status;
-    g_setup_hotspot_until = t.setup_hotspot_until;
+    // the later timer: both run only after a connection, the offline one may start later
+    g_hotspot_until = t.setup_hotspot_until == 0                  ? t.offline_hotspot_until
+                      : t.offline_hotspot_until == 0              ? t.setup_hotspot_until
+                      : static_cast<int32_t>(t.offline_hotspot_until - t.setup_hotspot_until) > 0 ? t.offline_hotspot_until
+                                                                                                  : t.setup_hotspot_until;
     g_saved_count = t.stored.count;
     for (size_t i = 0; i < t.stored.count; i++) {
         const SavedNetwork &network = t.stored.networks[i];
@@ -154,7 +158,7 @@ namespace {
 bool hotspot_wanted()
 {
     return usable_count() == 0 || t.stored.hotspot_enabled || t.setup_hotspot_until != 0 ||
-           t.setup_failed || t.force_hotspot;
+           t.setup_failed || t.force_hotspot || t.offline_hotspot || t.offline_hotspot_until != 0;
 }
 
 void update_hotspot()
@@ -226,13 +230,31 @@ void handle(const Msg &msg)
     case MsgType::Hotspot:
         t.stored.hotspot_enabled = msg.value != 0;
         if (!t.stored.hotspot_enabled) {
-            // off means off, also during the time after the setup
+            // off means off, also during the time after the setup or a time offline
             t.setup_hotspot_until = 0;
+            t.offline_hotspot = false;
+            t.offline_hotspot_until = 0;
         }
         save_hotspot(t.stored);
         break;
     case MsgType::ForceHotspot:
         t.force_hotspot = msg.value != 0;
+        break;
+    case MsgType::Pause:
+        cmd_pause(msg.ip);
+        break;
+    case MsgType::OpenHotspot:
+        // someone at the device (the board's button): open, as in the first setup, until the
+        // time after the next connection is over
+        if (t.status.state == StaState::Connected) {
+            t.setup_hotspot_until = now() + pdMS_TO_TICKS(kAfterConnectMs);
+        } else {
+            t.setup_hotspot = true;
+        }
+        if (t.status.hotspot_on) {
+            configure_hotspot();
+        }
+        ESP_LOGI(kTag, "the hotspot opens without a password (a button held at boot)");
         break;
     case MsgType::NewHotspotPassword:
         generate_hotspot_password(t.stored.hotspot_password);
@@ -264,6 +286,30 @@ void handle_timers()
     }
     if (t.status.state == StaState::Connected && reached(t.rssi_check_at)) {
         check_signal();
+    }
+    // no connection for a while with saved networks: a headless device opens its hotspot
+    if (t.status.state == StaState::Connected || usable_count() == 0) {
+        t.offline = false;
+    } else if (!t.offline) {
+        t.offline = true;
+        t.offline_since = now();
+    } else if (!t.offline_hotspot && now() - t.offline_since >= pdMS_TO_TICKS(kOfflineHotspotMs)) {
+        t.offline_hotspot = true;
+        t.offline_hotspot_until = 0;
+        // with its password: the time after a setup or a button that left it open is over (a
+        // first setup that never connected stays open)
+        if (t.setup_hotspot_until != 0) {
+            t.setup_hotspot_until = 0;
+            if (t.status.hotspot_on) {
+                configure_hotspot();
+            }
+        }
+        ESP_LOGW(kTag, "no Wi-Fi for %lu minutes: the hotspot opens with its password",
+                 static_cast<unsigned long>(kOfflineHotspotMs / 60000));
+    }
+    if (t.offline_hotspot_until != 0 && reached(t.offline_hotspot_until)) {
+        t.offline_hotspot_until = 0;
+        ESP_LOGI(kTag, "the hotspot of the time offline is over");
     }
     if (t.setup_hotspot_until != 0 && reached(t.setup_hotspot_until)) {
         t.setup_hotspot_until = 0;

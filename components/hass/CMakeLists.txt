@@ -3,4 +3,4 @@
 # cJSON come from idf_component.yml.
 idf_component_register(SRCS "src/mqtt.cpp" "src/api.cpp"
                        INCLUDE_DIRS "include"
-                       PRIV_REQUIRES effects esp_http_server esp_timer formats freertos leds platform webserver)
+                       PRIV_REQUIRES effects esp_http_server esp_timer formats freertos leds platform presets webserver)

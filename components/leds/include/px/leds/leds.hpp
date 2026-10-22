@@ -72,6 +72,8 @@ struct Config {
 };
 
 constexpr uint16_t kMaxCrossfadeMs = 10000;
+constexpr uint16_t kMaxFadeMs = 10000;
+constexpr uint32_t kMaxTransitionMs = 300000;
 
 // The settings of one lane (docs/leds.md section 3, per-lane correction): LEDs of another kind
 // on one lane (a panel with other chips) get their own color order, brightness, color balance and
@@ -115,8 +117,9 @@ struct State {
     uint8_t speed = 128;
 };
 
-// The settings of each animation (docs/leds.md section 6.2): its rotation, whether it follows the
-// audio, how strongly and how fast. Indexed like px::effects; stored apart (key "styles").
+// The settings of each animation (docs/leds.md sections 6.2 and 6.4): its rotation, whether it
+// follows the audio, how strongly and how fast, its palette. Indexed like px::effects; stored apart
+// (key "styles").
 constexpr size_t kMaxEffects = 32;
 
 struct Style {
@@ -126,13 +129,15 @@ struct Style {
     bool reactive = false;
     // how strongly it follows: 128 as built, 255 twice as much (effects::Params::strength)
     uint8_t strength = 128;
+    // an index of effects::palette_info, 0: its own colors (effects::Params::palette)
+    uint8_t palette = 0;
     // how fast what it hears rises and falls, ms (effects::Params::attack_ms, release_ms)
     uint16_t attack_ms = 20;
     uint16_t release_ms = 250;
 };
 
 struct Styles {
-    uint8_t version = 3;
+    uint8_t version = 4;
     Style style[kMaxEffects] = {};
 };
 
@@ -223,6 +228,16 @@ void set_brightness(uint8_t brightness);
 void set_effect(size_t index);
 void set_color(effects::Rgb color);
 void set_speed(uint8_t speed);
+// The next change of the brightness or of on/off takes `ms` from where the light is to where it
+// goes, instead of the fade time (Home Assistant's transition); at most kMaxTransitionMs.
+void set_transition(uint32_t ms);
+// The buttons and the encoder (px::input): on when off and off when on; the brightness by `steps`
+// (each about a sixteenth more or less, at least 1; up switches the LEDs on when they are off); the
+// next (`steps` > 0) or previous animation, without the test patterns and the ones that need a sound
+// source the device does not have
+void toggle();
+void step_brightness(int steps);
+void step_effect(int steps);
 // the rotation, the reactive switch and the strength of animation `effect`; ignored for one that is not there
 void set_style(size_t effect, Style style);
 Styles styles();

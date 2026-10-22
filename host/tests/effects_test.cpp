@@ -554,3 +554,62 @@ TEST(effects_noise_is_smooth_and_spread)
     CHECK(high - low > 150);
     CHECK(largest_step < 80); // neighbors an eighth of a cell apart
 }
+
+TEST(effects_palettes_list_and_find)
+{
+    REQUIRE(palette_count() >= 10);
+    CHECK(find_palette("none") == 0);
+    CHECK(find_palette("ocean") < palette_count());
+    CHECK(find_palette("nothing") == palette_count());
+    CHECK(palette_info(palette_count()) == nullptr);
+    for (size_t i = 0; i < palette_count(); i++) {
+        CHECK(find_palette(palette_info(i)->slug) == i);
+    }
+    // the test patterns come last, the animations before them
+    CHECK(animation_count() == find("edges"));
+    CHECK(animation_count() < count());
+}
+
+TEST(effects_palette_colors_blend_around)
+{
+    const uint8_t heat = static_cast<uint8_t>(find_palette("heat"));
+    CHECK(same(palette_color(heat, 0, {}), {0, 0, 0}));
+    CHECK(same(palette_color(heat, 240, {}), {255, 255, 255}));
+    // halfway between two entries: their mean
+    const Rgb half = palette_color(heat, 8, {});
+    CHECK(half.r >= 0x18 && half.r <= 0x1a && half.g == 0 && half.b == 0);
+    // the last entry blends into the first: once around
+    const Rgb wrap = palette_color(heat, 248, {});
+    CHECK(wrap.r > 100 && wrap.r < 160);
+    // shades of the color: the color itself at 0, a quarter of it in the middle
+    const uint8_t color = static_cast<uint8_t>(find_palette("color"));
+    CHECK(same(palette_color(color, 0, {200, 100, 40}), {200, 100, 40}));
+    const Rgb dark = palette_color(color, 128, {200, 100, 40});
+    CHECK(dark.r >= 49 && dark.r <= 51 && dark.g >= 24 && dark.g <= 26);
+}
+
+TEST(effects_palette_changes_the_colors)
+{
+    std::vector<Rgb> own(8 * 2), ocean(8 * 2);
+    Canvas a{8, 2, own.data()};
+    Canvas b{8, 2, ocean.data()};
+    Params params;
+    render(find("rainbow"), a, params, 1000);
+    params.palette = static_cast<uint8_t>(find_palette("ocean"));
+    render(find("rainbow"), b, params, 1000);
+    bool differ = false;
+    for (size_t i = 0; i < own.size(); i++) {
+        differ = differ || !same(own[i], ocean[i]);
+        // the ocean has no red to speak of
+        CHECK(ocean[i].r < 0x90);
+    }
+    CHECK(differ);
+    // fire with a palette is dark where there is no heat
+    std::vector<Rgb> pixels(4 * 8);
+    std::vector<uint8_t> memory(memory_size(4, 8));
+    Canvas fire_canvas{4, 8, pixels.data(), memory.data(), memory.size()};
+    for (uint32_t ms = 0; ms < 2000; ms += 20) {
+        render(find("fire"), fire_canvas, params, ms);
+    }
+    CHECK(same(fire_canvas.at(0, 0), {0, 0, 0}) || fire_canvas.at(0, 0).b < 40);
+}

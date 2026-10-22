@@ -20,6 +20,7 @@
 #include "px/formats/json_writer.hpp"
 #include "px/leds/leds.hpp"
 #include "px/platform/settings.hpp"
+#include "px/presets/presets.hpp"
 
 namespace px::hass {
 
@@ -62,6 +63,15 @@ struct Sent {
     leds::Overlay overlay;
     bool power_on_valid = false;
     leds::PowerOn power_on = leds::PowerOn::Restore;
+    // the fade and crossfade times and dithering (leds::Config)
+    bool timing_valid = false;
+    uint16_t fade_ms = 0;
+    uint16_t crossfade_ms = 0;
+    bool dither = false;
+    // the presets: the list (announced again when it changes) and the one the light matches
+    bool presets_valid = false;
+    uint32_t presets_revision = 0;
+    size_t preset = 0;
 };
 Sent g_sent;
 bool g_motion = false;
@@ -177,9 +187,10 @@ void announce_number(char *buffer, size_t size, const char *object, const char *
     announce("number", object, json);
 }
 
-// a select entity on <object>/set and <object>/state
-void announce_select(char *buffer, size_t size, const char *object, const char *name, const char *const *options,
-                     size_t count, const char *icon, bool config)
+// a select entity on <object>/set and <object>/state; option i is `option(i, context)`
+void announce_select(char *buffer, size_t size, const char *object, const char *name,
+                     const char *(*option)(size_t index, const void *context), const void *context, size_t count,
+                     const char *icon, bool config)
 {
     char command[kTopicSize * 2], state[kTopicSize * 2], suffix[40];
     std::snprintf(suffix, sizeof(suffix), "%s/set", object);
@@ -190,7 +201,7 @@ void announce_select(char *buffer, size_t size, const char *object, const char *
     begin_config(json, object, name);
     json.string("command_topic", command).string("state_topic", state).begin_array("options");
     for (size_t i = 0; i < count; i++) {
-        json.string(nullptr, options[i]);
+        json.string(nullptr, option(i, context));
     }
     json.end_array().string("icon", icon);
     if (config) {
@@ -200,9 +211,59 @@ void announce_select(char *buffer, size_t size, const char *object, const char *
     announce("select", object, json);
 }
 
+// the options of a select from a list of texts
+void announce_select(char *buffer, size_t size, const char *object, const char *name, const char *const *options,
+                     size_t count, const char *icon, bool config)
+{
+    announce_select(
+        buffer, size, object, name,
+        [](size_t index, const void *context) { return static_cast<const char *const *>(context)[index]; }, options,
+        count, icon, config);
+}
+
+// a switch entity on <object>/set and <object>/state
+void announce_switch(char *buffer, size_t size, const char *object, const char *name, const char *icon, bool config)
+{
+    char command[kTopicSize * 2], state[kTopicSize * 2], suffix[40];
+    std::snprintf(suffix, sizeof(suffix), "%s/set", object);
+    topic(command, suffix);
+    std::snprintf(suffix, sizeof(suffix), "%s/state", object);
+    topic(state, suffix);
+    formats::JsonWriter json(buffer, size);
+    begin_config(json, object, name);
+    json.string("command_topic", command).string("state_topic", state).string("icon", icon);
+    if (config) {
+        json.string("entity_category", "config");
+    }
+    json.end_object();
+    announce("switch", object, json);
+}
+
+// The preset select: the names of the presets; without any it is removed (a select needs
+// options). The state is the preset the light matches, "None" (unknown) when none does.
+void announce_presets(char *buffer, size_t size)
+{
+    const size_t count = presets::count();
+    if (count == 0) {
+        forget("select", "preset");
+        return;
+    }
+    // copies: the list may change while the config is written
+    static presets::Preset list[presets::kMaxPresets];
+    for (size_t i = 0; i < count; i++) {
+        presets::get(i, list[i]);
+    }
+    announce_select(
+        buffer, size, "preset", "Preset",
+        [](size_t index, const void *context) { return static_cast<const presets::Preset *>(context)[index].name; },
+        list, count, "mdi:playlist-star", false);
+}
+
 void announce_all()
 {
-    static char buffer[1536]; // the client's task only
+    // the client's task on connect, the timer's when the audio source changes (it sends only after
+    // the connect's announce: g_sent is cleared there)
+    static char buffer[1536];
     char command[kTopicSize * 2], state[kTopicSize * 2];
     const bool audio = has_audio();
 
@@ -355,6 +416,17 @@ void announce_all()
         announce_number(buffer, sizeof(buffer), "release", "Sound release", 0, effects::kMaxReleaseMs, "ms",
                         "mdi:arrow-down-bold", false);
     }
+    // the current animation's palette (each animation keeps its own)
+    announce_select(
+        buffer, sizeof(buffer), "palette", "Palette",
+        [](size_t index, const void *) { return effects::palette_info(index)->name; }, nullptr,
+        effects::palette_count(), "mdi:palette", false);
+    announce_presets(buffer, sizeof(buffer));
+    announce_number(buffer, sizeof(buffer), "transition", "Transition", 0, leds::kMaxFadeMs, "ms",
+                    "mdi:transition", true);
+    announce_number(buffer, sizeof(buffer), "crossfade", "Crossfade", 0, leds::kMaxCrossfadeMs, "ms",
+                    "mdi:transition-masked", true);
+    announce_switch(buffer, sizeof(buffer), "dither", "Dithering", "mdi:blur", true);
     announce_select(buffer, sizeof(buffer), "overlay", "Overlay", kOverlayModes, std::size(kOverlayModes),
                     "mdi:format-text", false);
     {
@@ -462,12 +534,15 @@ void on_timer(void *)
     }
     if (!g_sent.style_valid || g_sent.style.rotation != s.style.rotation || g_sent.style.reactive != s.style.reactive ||
         g_sent.style.strength != s.style.strength || g_sent.style.attack_ms != s.style.attack_ms ||
-        g_sent.style.release_ms != s.style.release_ms) {
+        g_sent.style.release_ms != s.style.release_ms || g_sent.style.palette != s.style.palette) {
         char state[kTopicSize * 2];
         char rotation[8];
         std::snprintf(rotation, sizeof(rotation), "%u", s.style.rotation * 90u);
         topic(state, "rotation/state");
         publish(state, rotation, true);
+        const effects::PaletteInfo *palette = effects::palette_info(s.style.palette);
+        topic(state, "palette/state");
+        publish(state, palette != nullptr ? palette->name : effects::palette_info(0)->name, true);
         if (audio) {
             topic(state, "reactive/state");
             publish(state, s.style.reactive ? "ON" : "OFF", true);
@@ -495,13 +570,47 @@ void on_timer(void *)
         g_sent.overlay = o;
         g_sent.overlay_valid = true;
     }
-    const leds::PowerOn power_on = leds::config().power_on;
+    const leds::Config config = leds::config();
+    const leds::PowerOn power_on = config.power_on;
     if (!g_sent.power_on_valid || g_sent.power_on != power_on) {
         char state[kTopicSize * 2];
         topic(state, "power_on/state");
         publish(state, kPowerOn[static_cast<size_t>(power_on) % std::size(kPowerOn)], true);
         g_sent.power_on = power_on;
         g_sent.power_on_valid = true;
+    }
+    if (!g_sent.timing_valid || g_sent.fade_ms != config.fade_ms || g_sent.crossfade_ms != config.crossfade_ms ||
+        g_sent.dither != config.dither) {
+        char state[kTopicSize * 2];
+        char number[8];
+        std::snprintf(number, sizeof(number), "%u", config.fade_ms);
+        topic(state, "transition/state");
+        publish(state, number, true);
+        std::snprintf(number, sizeof(number), "%u", config.crossfade_ms);
+        topic(state, "crossfade/state");
+        publish(state, number, true);
+        topic(state, "dither/state");
+        publish(state, config.dither ? "ON" : "OFF", true);
+        g_sent.fade_ms = config.fade_ms;
+        g_sent.crossfade_ms = config.crossfade_ms;
+        g_sent.dither = config.dither;
+        g_sent.timing_valid = true;
+    }
+    // the presets: their names again when the list changed, and the one the light matches
+    const uint32_t revision = presets::revision();
+    if (g_sent.presets_valid && g_sent.presets_revision != revision) {
+        static char buffer[1536]; // the timer's task only
+        announce_presets(buffer, sizeof(buffer));
+    }
+    const size_t preset = presets::current();
+    if (!g_sent.presets_valid || g_sent.presets_revision != revision || g_sent.preset != preset) {
+        presets::Preset p{};
+        char state[kTopicSize * 2];
+        topic(state, "preset/state");
+        publish(state, presets::get(preset, p) ? p.name : "None", true);
+        g_sent.presets_revision = revision;
+        g_sent.preset = preset;
+        g_sent.presets_valid = true;
     }
     const int64_t now = esp_timer_get_time();
     if (now - g_sent.sensors_at >= kSensorUs) {
@@ -557,6 +666,14 @@ void light_command(const char *data, size_t length)
             leds::set_color({static_cast<uint8_t>(r->valueint), static_cast<uint8_t>(g->valueint),
                              static_cast<uint8_t>(b->valueint)});
         }
+    }
+    // the brightness and on/off that follow take this long (seconds, from Home Assistant)
+    if (const cJSON *transition = cJSON_GetObjectItem(root, "transition"); cJSON_IsNumber(transition)) {
+        const double seconds = transition->valuedouble;
+        leds::set_transition(seconds <= 0 ? 0u
+                             : seconds >= leds::kMaxTransitionMs / 1000.0
+                                 ? leds::kMaxTransitionMs
+                                 : static_cast<uint32_t>(seconds * 1000.0));
     }
     if (const cJSON *brightness = cJSON_GetObjectItem(root, "brightness"); cJSON_IsNumber(brightness)) {
         const int value = brightness->valueint;
@@ -656,6 +773,56 @@ void handle_data(const esp_mqtt_event_t &event)
         leds::set_style(effect, style);
         return;
     }
+    topic(expected, "palette/set");
+    if (std::strcmp(name, expected) == 0) {
+        char text[40];
+        std::snprintf(text, sizeof(text), "%.*s", event.data_len, event.data);
+        const size_t effect = leds::status().state.effect;
+        leds::Style style = leds::styles().style[effect < leds::kMaxEffects ? effect : 0];
+        for (size_t i = 0; i < effects::palette_count(); i++) {
+            if (std::strcmp(effects::palette_info(i)->name, text) == 0 ||
+                std::strcmp(effects::palette_info(i)->slug, text) == 0) {
+                style.palette = static_cast<uint8_t>(i);
+                leds::set_style(effect, style);
+            }
+        }
+        return;
+    }
+    topic(expected, "preset/set");
+    if (std::strcmp(name, expected) == 0) {
+        char text[presets::kNameSize + 1];
+        std::snprintf(text, sizeof(text), "%.*s", event.data_len, event.data);
+        if (!presets::apply(presets::find(text))) {
+            ESP_LOGW(kTag, "no preset '%s'", text);
+        }
+        return;
+    }
+    topic(expected, "transition/set");
+    const bool fade = std::strcmp(name, expected) == 0;
+    topic(expected, "crossfade/set");
+    if (fade || std::strcmp(name, expected) == 0) {
+        char text[8];
+        std::snprintf(text, sizeof(text), "%.*s", event.data_len, event.data);
+        const int value = std::atoi(text);
+        leds::Config c = leds::config();
+        const auto ms = static_cast<uint16_t>(value < 0 ? 0 : value > leds::kMaxFadeMs ? leds::kMaxFadeMs : value);
+        if (fade) {
+            c.fade_ms = ms;
+        } else {
+            c.crossfade_ms = ms;
+        }
+        char error[64];
+        leds::set_config(c, error, sizeof(error));
+        return;
+    }
+    topic(expected, "dither/set");
+    if (std::strcmp(name, expected) == 0) {
+        leds::Config c = leds::config();
+        c.dither = event.data_len == 2 && std::strncmp(event.data, "ON", 2) == 0;
+        char error[64];
+        leds::set_config(c, error, sizeof(error));
+        return;
+    }
     topic(expected, "overlay/set");
     if (std::strcmp(name, expected) == 0) {
         for (size_t i = 0; i < std::size(kOverlayModes); i++) {
@@ -712,7 +879,8 @@ void on_event(void *, esp_event_base_t, int32_t id, void *data)
         announce_all();
         for (const char *suffix :
              {"light/set", "speed/set", "restart", "auto_off/set", "auto_off_minutes/set", "rotation/set", "reactive/set",
-              "strength/set", "attack/set", "release/set", "overlay/set", "overlay_text/set", "power_on/set"}) {
+              "strength/set", "attack/set", "release/set", "overlay/set", "overlay_text/set", "power_on/set",
+              "palette/set", "preset/set", "transition/set", "crossfade/set", "dither/set"}) {
             topic(name, suffix);
             esp_mqtt_client_subscribe(event.client, name, 1);
         }

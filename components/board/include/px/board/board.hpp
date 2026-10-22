@@ -35,6 +35,25 @@ constexpr LanePins lanes(std::initializer_list<int8_t> pins)
     return out;
 }
 
+// Push buttons the firmware handles (px::input): the board's own and up to three more
+constexpr size_t kMaxButtons = 4;
+
+using ButtonPins = std::array<int8_t, kMaxButtons>;
+
+// `pins` in button order, -1 for the buttons after them
+constexpr ButtonPins buttons(std::initializer_list<int8_t> pins)
+{
+    ButtonPins out{};
+    out.fill(-1);
+    size_t i = 0;
+    for (const int8_t pin : pins) {
+        if (i < out.size()) {
+            out[i++] = pin;
+        }
+    }
+    return out;
+}
+
 // The constants of a board type. A variant of the board, one unit's add-ons (a relay, a motion
 // sensor, other LED pins), is a private copy of px_board_variant.hpp in
 // boards/<board>/variants/<name>/ whose apply() changes the fields below (docs/adding-a-board.md
@@ -62,8 +81,18 @@ struct Info {
     float light_sensor_scale = 1.0f;
     // An LDR on this ADC1 GPIO (LDR to 3V3, 10 kOhm to GND) when no BH1750 answers, -1: none
     int8_t light_ldr_gpio = -1;
-    // The board's button (BOOT on the dev kits), low while pressed, -1: none
-    int8_t button_gpio = -1;
+    // Push buttons to GND, low while pressed (px::input): button 1 is the board's own (BOOT on the
+    // dev kits). The internal pull-up is used where the pin has one (not GPIO 34 to 39 of the
+    // ESP32: those need one on the board). -1: none (a button that is not there keeps its number,
+    // so the others keep theirs and their actions)
+    ButtonPins button_gpios = buttons({});
+    // the button (0: button 1) that, held while the device starts, opens the hotspot
+    uint8_t hotspot_button = 0;
+    // A rotary encoder (px::input): its A and B pins (to GND at the detents, pull-ups) and its push
+    // switch (low while pressed), -1: none
+    int8_t encoder_a_gpio = -1;
+    int8_t encoder_b_gpio = -1;
+    int8_t encoder_button_gpio = -1;
     // An I2S microphone (INMP441 or alike: L/R to GND), its clock, word select and data pins,
     // -1: none (px::audio, docs/leds.md section 6.1)
     int8_t mic_sck_gpio = -1;

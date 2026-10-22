@@ -8,8 +8,9 @@
 //
 // Entities: a light (JSON schema: on, brightness, RGB color, the animations as effects), a
 // number (speed), sensors (power in W, frames per second), a binary sensor (motion, with a
-// sensor), the current animation's rotation and sound settings, the overlay, the power on
-// behavior and a button (restart). The table is in docs/leds.md section 8.
+// sensor), the current animation's rotation, palette and sound settings, the presets, the
+// overlay, the transition and crossfade times, dithering, the power on behavior and a button
+// (restart). The light takes Home Assistant's transition. The table is in docs/leds.md section 8.
 //
 // Stored in the settings NVS, namespace "mqtt": the settings as a blob, the password apart (it
 // never leaves the device).

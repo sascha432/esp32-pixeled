@@ -25,6 +25,8 @@
 #include "esp_timer.h"
 #include "px/audio/audio.hpp"
 #include "px/board/board.hpp"
+#include "px/hass/hass.hpp"
+#include "px/input/input.hpp"
 #include "px/light_sensor/ldr.hpp"
 #include "px/logbuf/logbuf.hpp"
 #include "px/light_sensor/light_sensor.hpp"
@@ -35,6 +37,7 @@
 #include "px/layout/layout.hpp"
 #include "px/leds/leds.hpp"
 #include "px/output/output.hpp"
+#include "px/presets/presets.hpp"
 #include "px/relay/relay.hpp"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
@@ -190,7 +193,15 @@ int cmd_wifi(int argc, char **argv)
     if (std::strcmp(sub, "reconnect") == 0) {
         return check(net::reconnect());
     }
-    return usage("wifi [status|list|add|connect|remove|up|down|policy|scan|results|reconnect]");
+    // the connection off for a while, as if the networks were gone (the offline hotspot after 5 min)
+    if (std::strcmp(sub, "pause") == 0) {
+        const int seconds = argc == 3 ? std::atoi(argv[2]) : 0;
+        if (seconds < 1 || seconds > static_cast<int>(net::kMaxPauseS)) {
+            return usage("wifi pause <1-3600 s>   (no Wi-Fi for that long; the hotspot opens after 5 min)");
+        }
+        return check(net::pause(static_cast<uint32_t>(seconds)));
+    }
+    return usage("wifi [status|list|add|connect|remove|up|down|policy|scan|results|reconnect|pause <s>]");
 }
 
 int cmd_hotspot(int argc, char **argv)
@@ -204,7 +215,11 @@ int cmd_hotspot(int argc, char **argv)
     if (argc == 2 && std::strcmp(argv[1], "password") == 0) {
         return check(net::new_hotspot_password());
     }
-    return usage("hotspot on|off|password");
+    // as the hotspot button held at boot: open, until 15 minutes after the next connection
+    if (argc == 2 && std::strcmp(argv[1], "open") == 0) {
+        return check(net::open_hotspot());
+    }
+    return usage("hotspot on|off|password|open");
 }
 
 int cmd_fs(int, char **)
@@ -593,10 +608,12 @@ void print_leds_status()
 {
     const px::leds::Status s = px::leds::status();
     const px::effects::Info *effect = px::effects::info(s.state.effect);
-    std::printf("%s, brightness %u (now %u), %s, color %u,%u,%u, speed %u, rotation %u%s (strength %u, attack %u ms, "
-                "release %u ms)%s\n",
+    const px::effects::PaletteInfo *palette = px::effects::palette_info(s.style.palette);
+    std::printf("%s, brightness %u (now %u), %s, color %u,%u,%u, speed %u, palette %s, rotation %u%s (strength %u, "
+                "attack %u ms, release %u ms)%s\n",
                 s.state.on ? "on" : "off", s.state.brightness, s.level, effect != nullptr ? effect->slug : "?",
-                s.state.color.r, s.state.color.g, s.state.color.b, s.state.speed, s.style.rotation * 90u,
+                s.state.color.r, s.state.color.g, s.state.color.b, s.state.speed,
+                palette != nullptr ? palette->slug : "?", s.style.rotation * 90u,
                 s.style.reactive ? ", reacts to sound" : "", s.style.strength, s.style.attack_ms, s.style.release_ms,
                 s.has_audio ? (s.hears_audio ? " (hears sound)" : " (silence)") : "");
     std::printf("canvas %ux%u, %lu LEDs on %u lanes (%s), supply %s, %u fps, %lu mW%s%s%s\n", s.width, s.height,
@@ -634,6 +651,64 @@ int change_config(px::leds::Config config)
     if (!px::leds::set_config(config, error, sizeof(error))) {
         std::printf("%s\n", error);
         return 1;
+    }
+    return 0;
+}
+
+// MQTT: the state and the settings; `mqtt set` changes them (the password stays), "-" for an empty
+// field
+int cmd_mqtt(int argc, char **argv)
+{
+    namespace hass = px::hass;
+    if (argc == 7 && std::strcmp(argv[1], "set") == 0) {
+        hass::Settings s = hass::settings();
+        s.enabled = std::strcmp(argv[2], "on") == 0;
+        const auto field = [](char *out, size_t size, const char *text) {
+            std::snprintf(out, size, "%s", std::strcmp(text, "-") == 0 ? "" : text);
+        };
+        field(s.uri, sizeof(s.uri), argv[3]);
+        field(s.prefix, sizeof(s.prefix), argv[4]);
+        field(s.base, sizeof(s.base), argv[5]);
+        field(s.username, sizeof(s.username), argv[6]);
+        char error[96] = {};
+        if (!hass::set_settings(s, nullptr, error, sizeof(error))) {
+            std::printf("%s\n", error);
+            return 1;
+        }
+    } else if (argc != 1) {
+        return usage("mqtt [set on|off <uri> <prefix> <base> <user>]   (- for empty; the password stays)");
+    }
+    const hass::Settings s = hass::settings();
+    const hass::Status st = hass::status();
+    std::printf("%s: %s%s%s; uri '%s', user '%s'%s, prefix '%s', base '%s' (%s)\n", s.enabled ? "on" : "off",
+                hass::state_name(st.state), st.error[0] != 0 ? ", " : "", st.error, s.uri, s.username,
+                hass::password_set() ? " with a password" : "", s.prefix, s.base, st.base);
+    return 0;
+}
+
+int cmd_input(int, char **)
+{
+    if (!px::input::running()) {
+        std::printf("no buttons, no encoder\n");
+        return 0;
+    }
+    const px::input::Status s = px::input::status();
+    const px::input::Settings c = px::input::settings();
+    for (size_t i = 0; i <= px::input::kMaxButtons; i++) {
+        const int8_t gpio = i < px::input::kMaxButtons ? s.button_gpio[i] : s.encoder_button;
+        if (gpio < 0) {
+            continue;
+        }
+        const px::input::Actions &a = c.button[i];
+        std::printf("%s %u (GPIO %d) %s: click %s, double %s, hold %s%s\n",
+                    i < px::input::kMaxButtons ? "button" : "encoder push",
+                    static_cast<unsigned>(i < px::input::kMaxButtons ? i + 1 : 0), gpio, s.pressed[i] ? "pressed" : "up",
+                    px::input::action_slug(a.click), px::input::action_slug(a.double_click), px::input::action_slug(a.hold),
+                    i == s.hotspot_button ? "; held at boot: the hotspot" : "");
+    }
+    if (s.encoder_a >= 0) {
+        std::printf("encoder GPIO %d, %d: position %ld, the knob on the %s\n", s.encoder_a, s.encoder_b,
+                    static_cast<long>(s.encoder_position), s.knob_on_animations ? "animations" : "brightness");
     }
     return 0;
 }
@@ -703,6 +778,52 @@ int cmd_render(int argc, char **argv)
             return argc == 3 ? 1 : 0;
         }
         leds::set_effect(index);
+        return 0;
+    }
+    if (std::strcmp(sub, "palette") == 0) {
+        const size_t index = argc == 3 ? px::effects::find_palette(argv[2]) : px::effects::palette_count();
+        if (index >= px::effects::palette_count()) {
+            std::printf("palettes:");
+            for (size_t i = 0; i < px::effects::palette_count(); i++) {
+                std::printf(" %s", px::effects::palette_info(i)->slug);
+            }
+            std::printf("   (the current animation)\n");
+            return argc == 3 ? 1 : 0;
+        }
+        const size_t effect = leds::status().state.effect;
+        leds::Style style = leds::styles().style[effect < leds::kMaxEffects ? effect : 0];
+        style.palette = static_cast<uint8_t>(index);
+        leds::set_style(effect, style);
+        return 0;
+    }
+    if (std::strcmp(sub, "preset") == 0) {
+        if (argc == 3 && std::strcmp(argv[2], "next") == 0) {
+            return px::presets::apply_next() ? 0 : 1;
+        }
+        if (argc == 4 && (std::strcmp(argv[2], "save") == 0 || std::strcmp(argv[2], "delete") == 0)) {
+            char error[64] = {};
+            const bool ok = argv[2][0] == 's' ? px::presets::save_current(argv[3], error, sizeof(error))
+                                              : px::presets::remove(px::presets::find(argv[3]), error, sizeof(error));
+            if (!ok) {
+                std::printf("%s\n", error);
+            }
+            return ok ? 0 : 1;
+        }
+        if (argc == 3) {
+            if (!px::presets::apply(px::presets::find(argv[2]))) {
+                std::printf("no preset '%s'\n", argv[2]);
+                return 1;
+            }
+            return 0;
+        }
+        const size_t current = px::presets::current();
+        for (size_t i = 0; i < px::presets::count(); i++) {
+            px::presets::Preset p{};
+            px::presets::get(i, p);
+            std::printf("%c %s\n", i == current ? '*' : ' ', p.name);
+        }
+        std::printf("%u presets; leds preset <name>|next|save <name>|delete <name>\n",
+                    static_cast<unsigned>(px::presets::count()));
         return 0;
     }
     if (std::strcmp(sub, "rotate") == 0 || std::strcmp(sub, "reactive") == 0 || std::strcmp(sub, "strength") == 0 ||
@@ -917,6 +1038,7 @@ int cmd_leds(int argc, char **argv)
         px::leds::suspend(true);
     } else if (std::strcmp(sub, "lanes") != 0) {
         return usage("leds [status] | on | off | bright <0-255> | effect [<name>] | color <r> <g> <b> | speed <0-255> |"
+                     " palette [<name>] | preset [<name>|next|save <name>|delete <name>] |"
                      " rotate 0|90|180|270 | reactive on|off | strength <0-255> | attack <ms> | release <ms> | autooff on|off|<min> |"
                      " fps <n> | crossfade <ms> | poweron restore|off|on | overlay ... | dither on|off | driver rmt|parallel | limit <mW> |"
                      " lane [<n> ...] | canvas | panel | layout -- output tests (suspend the LEDs until `leds resume`):"
@@ -1246,9 +1368,10 @@ void init_console()
 void register_commands()
 {
     esp_console_register_help_command();
-    add("wifi", "Wi-Fi: status, saved networks, scan, reconnect", "[status|list|add|connect|remove|up|down|policy|scan|results|reconnect]",
+    add("wifi", "Wi-Fi: status, saved networks, scan, reconnect, pause", "[status|list|add|connect|remove|up|down|policy|scan|results|reconnect|pause <s>]",
         cmd_wifi);
-    add("hotspot", "turn the hotspot on or off, or give it a new password", "on|off|password", cmd_hotspot);
+    add("hotspot", "turn the hotspot on or off, give it a new password, or open it as the button at boot does",
+        "on|off|password|open", cmd_hotspot);
     add("fs", "file system status", nullptr, cmd_fs);
     add("mem", "free memory: internal, DMA, PSRAM", nullptr, cmd_mem);
     add("restart", "restart the device", nullptr, cmd_restart);
@@ -1259,7 +1382,9 @@ void register_commands()
     add("crash", "crash on purpose: tries the panic handler (LED supply off) and the crash count", "yes", cmd_crash);
     add("light", "light sensor: values, calibration while adding a board", "[calibrate <lux>|reset|watch [s]|points]",
         cmd_light);
-    add("leds", "the LEDs: state, layout, and output tests", "[status] | on | off | bright <n> | effect [<name>] | color <r> <g> <b> | speed <n> | rotate <deg> | reactive on|off | strength <n> | attack <ms> | release <ms> | crossfade <ms> | poweron restore|off|on | overlay off|clock|text ... | limit <mW> | driver rmt|parallel | dither on|off | fps <n> | autooff on|off|<min> | lane [<n> ...] | canvas <w> <h> | panel ... | layout | setup <counts...> | fill | px | bench [n|encode] | lanes | resume", cmd_leds);
+    add("input", "the buttons and the encoder: pins, what is pressed, the actions", nullptr, cmd_input);
+    add("mqtt", "MQTT: the state and the settings", "[set on|off <uri> <prefix> <base> <user>]", cmd_mqtt);
+    add("leds", "the LEDs: state, layout, and output tests", "[status] | on | off | bright <n> | effect [<name>] | color <r> <g> <b> | speed <n> | palette [<name>] | preset [<name>|next|save|delete] | rotate <deg> | reactive on|off | strength <n> | attack <ms> | release <ms> | crossfade <ms> | poweron restore|off|on | overlay off|clock|text ... | limit <mW> | driver rmt|parallel | dither on|off | fps <n> | autooff on|off|<min> | lane [<n> ...] | canvas <w> <h> | panel ... | layout | setup <counts...> | fill | px | bench [n|encode] | lanes | resume", cmd_leds);
     add("relay", "the LED power switch: the state, or switched", "[status|<n> on|off]", cmd_relay);
     add("motion", "motion sensor: the state", "[status]", cmd_motion);
     add("audio", "microphone: the analysis and its settings",

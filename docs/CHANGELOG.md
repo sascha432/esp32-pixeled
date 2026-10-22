@@ -7,9 +7,56 @@ and what is gone under Removed. Updated in the same commit as the change ([CLAUD
 
 ## Unreleased (0.1.0)
 
+### 2026-10-22
+
+Added
+
+* `board::Info::hotspot_button`: which button, held while the device starts, opens the hotspot
+  (button 1 unless the board names another). The Buttons card, `GET /api/input` (`hotspot`) and
+  the console's `input` name it.
+* Console `wifi pause <s>`: the Wi-Fi off for a while, as if the networks were gone, to try the
+  hotspot of an offline device without the router.
+
+Changed
+
+* The hotspot of a device without Wi-Fi always takes its password: an open time left from the
+  button or a setup ends when it opens.
+
+* The test board is the WLED controller rev 1.1: its BTN0 is the hardware reset, so its variant
+  has buttons 2 to 4 only (BTN1 darker, BTN2 brighter, BTN3 on/off on GPIO 35, 34, 19) and BTN3 is
+  the hotspot button (hold it and press the reset). A button a board does not have is -1 and the
+  others keep their number and actions.
+* Docs: the controller's buttons for rev 1.1 and 1.3 as a table in leds.md section 9, the hotspot
+  button per board in architecture.md section 9.1, and a list of what to test on the board, step
+  by step, in TODO.md.
+
 ### 2026-10-21
 
 Added
+
+* Headless recovery: a device with saved networks and no Wi-Fi for 5 minutes opens its hotspot
+  (with its password) and keeps trying; button 1 held while the device starts (2 s) opens it
+  without a password. Both stay until 15 minutes after the Wi-Fi is back. Console `hotspot open`
+  does what the button does; the Hotspot page says when it opens by itself.
+* Buttons and a rotary encoder (`components/input`): up to 4 buttons, each with an action for a
+  click, a double click and a hold (on / off, next or previous animation, next preset, brighter,
+  darker, restart after 3 s, open the hotspot, the encoder's knob on the animations). The
+  encoder dims with acceleration (PCNT; GPIO interrupts on the C3). LEDs page card "Buttons",
+  `GET/POST /api/input`, backup section `input`, console `input`; host tests of the buttons. The
+  WLED controller's 4 buttons are in its variant (13 animation and restart, 35 darker, 34
+  brighter, 19 on / off); an encoder is not wired yet.
+* Palettes: rainbow, party, ocean, forest, lava, heat, cloud, sunset, pastel and shades of the
+  color, for rainbow, plasma, fire, color fade, ripple, spectrum and noise; kept per animation
+  (none: its own colors). LEDs page select, Home Assistant select "Palette", console
+  `leds palette`, backup `palette`; host tests.
+* Presets: up to 16 named lights (animation, color, speed, brightness, rotation, sound settings,
+  palette) on LittleFS. LEDs page card "Presets" (show, delete, save the light),
+  `GET /api/presets`, `POST /api/presets/save|apply|delete`, Home Assistant select "Preset" (the
+  state is the preset the light matches), the button action "next preset", console
+  `leds preset`, the backup's presets part (section `presets`).
+* Home Assistant: the light takes `transition` (the brightness and on/off of that command take
+  that long); numbers "Transition" (the fade time) and "Crossfade", switch "Dithering".
+* Console `mqtt [set ...]`: the MQTT state and settings, without the password.
 
 * Web UI page "Time": the clock (local time, time zone, last answer of a server), the time zone
   from the firmware's IANA list ("This browser's" picks the browser's) and two SNTP servers (empty:
@@ -71,6 +118,11 @@ Added
 
 Changed
 
+* `board::Info::button_gpio` is `button_gpios` (up to 4 buttons, `buttons({...})`), with
+  `encoder_a_gpio`, `encoder_b_gpio` and `encoder_button_gpio`; a variant that set the old field
+  sets the new one.
+* The stored animation styles are version 4 (with the palette); version 3 is taken over with the
+  palette at none.
 * The animation "Test: edges" moved behind "Fire" in the list, and behind the new animations.
 * ESP32 I2S output: the frame is encoded into a ring of 4 small DMA buffers while it is sent
   (15 KB for any count instead of 147 KB for 1024 LEDs per lane): 3 or 8 x 1024 LEDs at 32 fps,

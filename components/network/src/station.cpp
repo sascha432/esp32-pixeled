@@ -17,8 +17,6 @@ namespace {
 
 constexpr uint32_t kRetryMaxMs = 60000;
 constexpr uint32_t kRssiCheckMs = 5000;
-// the hotspot of the first setup stays on this long after the first connection
-constexpr uint32_t kSetupHotspotMs = 15 * 60 * 1000;
 // failed attempts of the first setup (not a wrong password) before the hotspot comes back
 constexpr uint8_t kSetupFailures = 3;
 
@@ -360,8 +358,16 @@ void on_got_ip(uint32_t ip)
     // the setup is done: its hotspot stays on for a while, so the phone can see the result
     if (t.setup_hotspot) {
         t.setup_hotspot = false;
-        t.setup_hotspot_until = now() + pdMS_TO_TICKS(kSetupHotspotMs);
-        ESP_LOGI(kTag, "setup hotspot stays on for %lu minutes", static_cast<unsigned long>(kSetupHotspotMs / 60000));
+        t.setup_hotspot_until = now() + pdMS_TO_TICKS(kAfterConnectMs);
+        ESP_LOGI(kTag, "setup hotspot stays on for %lu minutes", static_cast<unsigned long>(kAfterConnectMs / 60000));
+    }
+    // the same for the hotspot that opened while the device had no connection
+    t.offline = false;
+    if (t.offline_hotspot) {
+        t.offline_hotspot = false;
+        t.offline_hotspot_until = now() + pdMS_TO_TICKS(kAfterConnectMs);
+        ESP_LOGI(kTag, "connected again: the hotspot stays on for %lu minutes",
+                 static_cast<unsigned long>(kAfterConnectMs / 60000));
     }
 }
 
