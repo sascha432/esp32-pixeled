@@ -17,7 +17,6 @@
 #include "px/input/input.hpp"
 #include "px/network/network.hpp"
 #include "px/platform/time_sync.hpp"
-#include "px/platform/timezone.hpp"
 #include "px/presets/presets.hpp"
 #include "px/webserver/webserver.hpp"
 
@@ -807,11 +806,11 @@ void read_mqtt(const Node &value, bool apply, backup::Report &report)
 
 constexpr std::string_view kServerKeys[px::platform::kTimeServers] = {"server_1", "server_2"};
 
-// The clock (docs/ui/web/web-app.md section 4): the time zone and the SNTP servers, empty for
-// none (both empty: the defaults)
+// The clock (docs/ui/web/web-app.md section 4): the time zone (an IANA name or a POSIX TZ rule)
+// and the SNTP servers, empty for none (both empty: the defaults)
 void write_time(backup::Writer &out)
 {
-    char zone[px::platform::kMaxZoneLength] = {};
+    char zone[px::platform::kTimeZoneSize] = {};
     px::platform::time_zone(zone, sizeof(zone));
     const px::platform::TimeServers servers = px::platform::time_servers();
     out.section("time");
@@ -824,14 +823,13 @@ void write_time(backup::Writer &out)
 void read_time(const Node &value, bool apply, backup::Report &report)
 {
     const size_t problems = report.problems.size();
-    char current[px::platform::kMaxZoneLength] = {};
+    char current[px::platform::kTimeZoneSize] = {};
     px::platform::time_zone(current, sizeof(current));
     px::platform::TimeServers servers = px::platform::time_servers();
     backup::Fields fields(value, "time", report);
     String zone(current);
-    if (fields.text("zone", px::platform::kMaxZoneLength - 1, zone) && !zone.empty() &&
-        px::platform::time_zone_rule(zone.c_str()) == nullptr) {
-        fields.problem("zone", "not a time zone this firmware knows");
+    if (fields.text("zone", px::platform::kTimeZoneSize - 1, zone) && !px::platform::valid_time_zone(zone.c_str())) {
+        fields.problem("zone", "neither a time zone this firmware knows nor a POSIX TZ rule");
     }
     for (size_t i = 0; i < px::platform::kTimeServers; ++i) {
         String name(servers.names[i]);

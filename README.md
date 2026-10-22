@@ -18,8 +18,8 @@ Built:
 * Headless recovery: the hotspot opens after 5 minutes without Wi-Fi, or open when the board's
   hotspot button is held at boot.
 * Web UI: status, Wi-Fi, hotspot, MQTT, time, log, system (update, backup, restart, files), login.
-* Clock over SNTP: time zone and two servers on the web UI's Time page (pool.ntp.org and
-  time.cloudflare.com as built), in the backup.
+* Clock over SNTP: time zone (an IANA name or a custom POSIX TZ rule) and two servers on the web
+  UI's Time page (pool.ntp.org and time.cloudflare.com as built), in the backup.
 * Firmware and file system updates by upload or URL, rollback, a recovery app in the factory
   partition.
 * Backup of the settings in one YAML file (settings and presets parts).

@@ -35,12 +35,19 @@ bool time_synced();
 // when the last answer of a server set the clock, 0 before the first one
 std::time_t last_time_sync();
 
-// Sets the time zone by its IANA name ("Europe/Berlin") and keeps it for the next start; nothing
-// is written when it did not change. An empty name is UTC. False when the firmware does not know
-// the name.
-bool set_time_zone(const char *iana_name);
+// A time zone is an IANA name from the table ("Europe/Berlin") or, for a zone the table has wrong
+// or not at all, a POSIX TZ rule of its own ("CET-1CEST,M3.5.0,M10.5.0/3"), up to 63 bytes. Both
+// are kept under the same key; a name of the table wins over a rule of the same text.
+constexpr size_t kTimeZoneSize = 64;
 
-// the IANA name of the time zone in use, empty while there is none (UTC)
+// true for an empty text (UTC), a name of the table or a rule parse_tz_rule() accepts
+bool valid_time_zone(const char *zone);
+
+// Sets the time zone (a name or a rule, see above) and keeps it for the next start; nothing is
+// written when it did not change. An empty text is UTC. False when it is neither.
+bool set_time_zone(const char *zone);
+
+// the time zone in use (a name or a rule), empty while there is none (UTC)
 void time_zone(char *out, size_t size);
 
 // the stored servers (empty names: the defaults are used)

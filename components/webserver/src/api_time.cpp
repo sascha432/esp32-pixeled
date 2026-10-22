@@ -1,8 +1,9 @@
 // The clock in the web API (docs/ui/web/web-app.md section 4), login required:
 //
-//   GET  /api/time        {"synced", "now", "local", "zone", "last_sync", "servers", "defaults"}:
-//                         now and last_sync in Unix time (0: never), local as "2026-10-21 14:03:07"
-//   POST /api/time        any of zone (an IANA name, empty: UTC), server1, server2 (empty: none,
+//   GET  /api/time        {"synced", "now", "local", "zone", "rule", "last_sync", "servers", "defaults"}:
+//                         now and last_sync in Unix time (0: never), local as "2026-10-21 14:03:07",
+//                         rule the POSIX TZ rule in use ("UTC0" for none)
+//   POST /api/time        any of zone (an IANA name or a POSIX TZ rule, empty: UTC), server1, server2 (empty: none,
 //                         both empty: the defaults); answers like GET, 400 with the problem
 //   GET  /api/time/zones  the IANA names the firmware knows, sorted: ["Africa/Abidjan", ...]
 //
@@ -42,8 +43,10 @@ esp_err_t send_settings(httpd_req_t *req)
         localtime_r(&now, &tm);
         std::strftime(local, sizeof(local), "%Y-%m-%d %H:%M:%S", &tm);
     }
-    char zone[platform::kMaxZoneLength] = {};
+    char zone[platform::kTimeZoneSize] = {};
     platform::time_zone(zone, sizeof(zone));
+    // a name of the table or a rule of its own (time_sync.hpp)
+    const char *rule = zone[0] == 0 ? "UTC0" : platform::time_zone_rule(zone);
     const platform::TimeServers servers = platform::time_servers();
 
     char buffer[512];
@@ -53,6 +56,7 @@ esp_err_t send_settings(httpd_req_t *req)
         .number("now", synced ? now : 0)
         .string("local", local)
         .string("zone", zone)
+        .string("rule", rule != nullptr ? rule : zone)
         .number("last_sync", platform::last_time_sync())
         .begin_array("servers");
     for (const char *name : servers.names) {
@@ -79,16 +83,16 @@ esp_err_t post_time(httpd_req_t *req)
     if (!require_login(req)) {
         return ESP_OK;
     }
-    char body[320];
+    // a rule of 63 bytes is up to 189 in the form
+    char body[512];
     if (!read_body(req, body, sizeof(body))) {
         return send_error(req, "400 Bad Request", "the request is too large");
     }
     // both checked before either changes
-    char zone[platform::kMaxZoneLength] = {};
+    char zone[platform::kTimeZoneSize] = {};
     const bool has_zone = form_has(body, "zone");
-    if (has_zone && (!form_value(body, "zone", zone, sizeof(zone)) ||
-                     (zone[0] != 0 && platform::time_zone_rule(zone) == nullptr))) {
-        return send_error(req, "400 Bad Request", "zone: not a time zone this firmware knows");
+    if (has_zone && (!form_value(body, "zone", zone, sizeof(zone)) || !platform::valid_time_zone(zone))) {
+        return send_error(req, "400 Bad Request", "zone: neither a time zone this firmware knows nor a POSIX TZ rule");
     }
     platform::TimeServers servers = platform::time_servers();
     bool has_servers = false;

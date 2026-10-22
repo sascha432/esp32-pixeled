@@ -11,6 +11,9 @@ and what is gone under Removed. Updated in the same commit as the change ([CLAUD
 
 Added
 
+* Time page: "Custom rule (POSIX TZ)" in the zone list, a text field for a rule of its own when the
+  firmware's IANA table is out of date. `/api/time` takes a rule as `zone` and reports `rule`; the
+  backup keeps either.
 * `board::Info::hotspot_button`: which button, held while the device starts, opens the hotspot
   (button 1 unless the board names another). The Buttons card, `GET /api/input` (`hotspot`) and
   the console's `input` name it.

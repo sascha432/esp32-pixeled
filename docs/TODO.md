@@ -77,7 +77,8 @@ matrix (bench sent the frame before the console's power limit), far above 10 W; 
 out and was power cycled. Bench now sends the limited frame. Check the matrix and its supply.
 
 **Time page (2026-10-21, working on the test matrix):** the time zone and the SNTP servers,
-`/api/time`, backup section `time`. Not tried: the backup section's import.
+`/api/time`, backup section `time`. Not tried: the backup section's import. A custom POSIX TZ
+rule in place of a name (2026-10-22): the web UI works on the test matrix.
 
 **NVS write policy (2026-10-21, [architecture.md](architecture.md) section 9.3):** the delayed
 write ported from hassctrl (10 s, at most 60 s, 8 keys, discarded by a factory reset); the LED

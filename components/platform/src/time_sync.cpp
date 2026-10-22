@@ -24,16 +24,28 @@ constexpr const char *kKeyZone = "zone";
 constexpr const char *kKeyServers[kTimeServers] = {"server1", "server2"};
 // any time before this means the clock was never set (2025-01-01)
 constexpr time_t kValidAfter = 1735689600;
-// IANA names are at most about 30 characters ("America/Argentina/ComodRivadavia")
-constexpr size_t kZoneSize = 48;
 
 // g_mutex guards the zone, the servers and the start and restart of SNTP
 std::mutex g_mutex;
-char g_zone[kZoneSize] = {};
+char g_zone[kTimeZoneSize] = {};
 // lwIP keeps pointers to the names: they stay here while SNTP runs
 TimeServers g_servers;
 bool g_sntp_ready = false;
 std::atomic<time_t> g_last_sync{0};
+
+// the POSIX rule of a time zone: "UTC0" for none, the table's for a name, the text itself for a
+// rule; nullptr when it is neither
+const char *rule_of(const char *zone)
+{
+    if (zone[0] == 0) {
+        return "UTC0";
+    }
+    if (const char *rule = time_zone_rule(zone)) {
+        return rule;
+    }
+    TzRule parsed;
+    return strnlen(zone, kTimeZoneSize) < kTimeZoneSize && parse_tz_rule(zone, parsed) ? zone : nullptr;
+}
 
 void apply(const char *rule)
 {
@@ -116,9 +128,9 @@ esp_err_t start_time_sync()
     std::lock_guard lock(g_mutex);
     {
         Settings settings(kNamespace, Settings::Mode::Read);
-        char stored[kZoneSize] = {};
-        if (settings.ok() && settings.get_string(kKeyZone, stored, sizeof(stored)) == ESP_OK) {
-            if (const char *rule = time_zone_rule(stored)) {
+        char stored[kTimeZoneSize] = {};
+        if (settings.ok() && settings.get_string(kKeyZone, stored, sizeof(stored)) == ESP_OK && stored[0] != 0) {
+            if (const char *rule = rule_of(stored)) {
                 std::snprintf(g_zone, sizeof(g_zone), "%s", stored);
                 apply(rule);
                 ESP_LOGI(kTag, "time zone %s (%s)", stored, rule);
@@ -148,25 +160,30 @@ std::time_t last_time_sync()
     return g_last_sync;
 }
 
-bool set_time_zone(const char *iana_name)
+bool valid_time_zone(const char *zone)
 {
-    const char *rule = iana_name[0] != 0 ? time_zone_rule(iana_name) : "UTC0";
+    return rule_of(zone) != nullptr;
+}
+
+bool set_time_zone(const char *zone)
+{
+    const char *rule = rule_of(zone);
     if (rule == nullptr) {
-        ESP_LOGW(kTag, "unknown time zone '%s', the clock stays as it is", iana_name);
+        ESP_LOGW(kTag, "unknown time zone '%s', the clock stays as it is", zone);
         return false;
     }
     {
         std::lock_guard lock(g_mutex);
-        if (std::strcmp(g_zone, iana_name) == 0) {
+        if (std::strcmp(g_zone, zone) == 0) {
             return true;
         }
-        std::snprintf(g_zone, sizeof(g_zone), "%s", iana_name);
+        std::snprintf(g_zone, sizeof(g_zone), "%s", zone);
         apply(rule);
     }
-    ESP_LOGI(kTag, "time zone %s (%s)", iana_name[0] != 0 ? iana_name : "UTC", rule);
+    ESP_LOGI(kTag, "time zone %s (%s)", zone[0] != 0 ? zone : "UTC", rule);
     Settings settings(kNamespace, Settings::Mode::ReadWrite);
     esp_err_t err = !settings.ok()       ? ESP_FAIL
-                    : iana_name[0] != 0 ? settings.set_string(kKeyZone, iana_name)
+                    : zone[0] != 0      ? settings.set_string(kKeyZone, zone)
                                         : settings.erase(kKeyZone);
     if (err == ESP_ERR_NVS_NOT_FOUND) {
         err = ESP_OK;

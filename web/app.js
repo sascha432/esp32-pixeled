@@ -585,7 +585,9 @@ const views = {
       const ago = t.last_sync ? duration(Math.max(0, t.now - t.last_sync)) + " ago" : "not yet";
       $("#time-status").innerHTML = card("Clock", facts([
         ["Time", t.synced ? esc(t.local) : '<span class="badge text-bg-warning">not set</span>'],
-        ["Time zone", esc(t.zone || "UTC")],
+        // a name with the rule it stands for; a rule of its own once
+        ["Time zone", `${esc(t.zone || "UTC")}${t.zone && t.zone !== t.rule
+          ? ` <span class="small text-body-secondary font-monospace">${esc(t.rule)}</span>` : ""}`],
         ["Last answer", t.synced ? ago : "-"],
       ]));
     };
@@ -595,6 +597,9 @@ const views = {
     for (const z of zones) (groups[z.includes("/") ? z.split("/")[0] : "Other"] ||= []).push(z);
     const option = (z) => `<option value="${esc(z)}" ${z === t.zone ? "selected" : ""}>${esc(z.replace(/_/g, " "))}</option>`;
     const browserZone = Intl.DateTimeFormat().resolvedOptions().timeZone;
+    // a zone that is not in the list is a POSIX TZ rule of its own (not a possible zone name)
+    const customValue = "*custom";
+    const custom = !!t.zone && !zones.includes(t.zone);
     $("#time-form").innerHTML = card("Settings", `
       <form id="time" autocomplete="off">
         <label class="form-label" for="time-zone">Time zone</label>
@@ -603,9 +608,17 @@ const views = {
             <option value="" ${t.zone ? "" : "selected"}>UTC (none set)</option>
             ${Object.keys(groups).sort((a, b) => (a === "Other") - (b === "Other") || a.localeCompare(b))
               .map((g) => `<optgroup label="${esc(g)}">${groups[g].map(option).join("")}</optgroup>`).join("")}
+            <option value="${customValue}" ${custom ? "selected" : ""}>Custom rule (POSIX TZ)</option>
           </select>
           ${zones.includes(browserZone) ? `<button id="time-browser" class="btn btn-outline-secondary text-nowrap" type="button"
             title="${esc(browserZone)}">This browser's</button>` : ""}
+        </div>
+        <div id="time-custom" class="mb-3 ${custom ? "" : "d-none"}">
+          <label class="form-label" for="time-rule">POSIX TZ rule</label>
+          <input id="time-rule" class="form-control font-monospace" value="${esc(t.rule)}" placeholder="CET-1CEST,M3.5.0,M10.5.0/3"
+            maxlength="63" spellcheck="false" autocapitalize="off">
+          <div class="form-text">For a zone the list has wrong or not at all, such as after a change of the law. The
+            standard name and its offset west of UTC, then the daylight saving name and when it starts and ends.</div>
         </div>
         <div class="row g-3">
           ${t.servers.map((s, i) => `<div class="col-sm-6"><label class="form-label" for="time-server${i + 1}">Time server ${i + 1}</label>
@@ -615,12 +628,15 @@ const views = {
         <div class="form-text">Host names or addresses of NTP servers, such as the router. Both empty: ${t.defaults.map(esc).join(" and ")}.</div>
         <div class="d-flex justify-content-end mt-3"><button class="btn btn-primary" type="submit">Save</button></div>
       </form>`);
+    const showCustom = () => $("#time-custom").classList.toggle("d-none", $("#time-zone").value !== customValue);
+    $("#time-zone").onchange = showCustom;
     const browser = $("#time-browser");
-    if (browser) browser.onclick = () => { $("#time-zone").value = browserZone; };
+    if (browser) browser.onclick = () => { $("#time-zone").value = browserZone; showCustom(); };
     $("#time").onsubmit = (e) => {
       e.preventDefault();
       busy(e.submitter || $("#time button[type=submit]"), async () => {
-        const form = { zone: $("#time-zone").value };
+        const zone = $("#time-zone").value;
+        const form = { zone: zone === customValue ? $("#time-rule").value.trim() : zone };
         t.servers.forEach((_, i) => (form[`server${i + 1}`] = $(`#time-server${i + 1}`).value.trim()));
         t = await api("/api/time", form);
         drawStatus();
