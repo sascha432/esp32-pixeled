@@ -83,6 +83,8 @@ Planned ([docs/leds.md](docs/leds.md)):
 The default pins are in `components/board/boards/<board>.cpp`; a unit with other wiring is a
 variant ([docs/adding-a-board.md](docs/adding-a-board.md)). The WLED controller PCB (ESP32) is
 in git as the variants `esp32_devkit.wled_controller_rev1_1` and `esp32_devkit.wled_controller_rev1_3`.
+Clones of the dev kits, e.g. the AI-S3 (ESP32-S3 N16R8, `esp32s3_devkit`, example variant
+`esp32s3_devkit.ai_s3_test`), are in [docs/adding-a-board.md](docs/adding-a-board.md) ("Clones").
 
 ## Build
 

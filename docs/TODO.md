@@ -114,6 +114,10 @@ styles take it. Not tried: the factory reset path (it erases the test board's se
   pins, plus button 1 on GPIO 13 (BTN0, the hotspot button) and a signal LED of its own on GPIO 16
   (rev 1.1's indicator LED hangs on the MOSFET, no GPIO). Built, nothing of it verified on a
   rev 1.3 board.
+* S3 test board: the AI-S3 (ESP32-S3 N16R8) on COM8, variant `esp32s3_devkit.ai_s3_test` (in git,
+  adding-a-board.md "Clones"), 2026-10-22. Strips on lanes 1 to 4 (GPIO 4 to 7, 4 x 1024 in the
+  layout) light with RMT; lanes 5 to 8 wait for the S3 parallel output (LCD_CAM), the S3 has 4 RMT
+  TX channels. Its 5Vin pin has no USB 5 V while the jumper IN-OUT is open.
 * Recovery app sizes (2026-10-19): S3 0.93 MB, C3 0.99 MB, C6 1.07 MB. The 4 MB table's factory
   grew to 1.19 MB for the C6 (ota_0 2.25 MB). Shrink the recovery app (no TLS client? log level)
   before the main firmware with the LED engine needs the room.

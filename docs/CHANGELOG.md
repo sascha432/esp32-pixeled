@@ -11,6 +11,10 @@ and what is gone under Removed. Updated in the same commit as the change ([CLAUD
 
 Added
 
+* docs/adding-a-board.md "Clones": the AI-S3 board (ESP32-S3 N16R8) with a photo, a pinout
+  image (GPIO and LED lane of every pin), the GPIO of its RGB LED (48) and its solder jumpers; it runs
+  the `esp32s3_devkit` firmware. Its variant `esp32s3_devkit.ai_s3_test` (8 lanes on GPIO 4 to 7
+  and 15 to 18, no relay or sensors) is in git as an example.
 * Time page: "Custom rule (POSIX TZ)" in the zone list, a text field for a rule of its own when the
   firmware's IANA table is out of date. `/api/time` takes a rule as `zone` and reports `rule`; the
   backup keeps either.
@@ -36,6 +40,8 @@ Changed
 
 Fixed
 
+* A smaller layout (fewer LEDs or lanes) leaves no LEDs lit at the end of a strip: the old
+  lanes get one dark frame before the new layout starts.
 * WLED controller rev 1.1: no power LED on GPIO 16, its indicator LED hangs on the MOSFET.
 * Docs: the controller's buttons for rev 1.1 and 1.3 as a table in leds.md section 9, the hotspot
   button per board in architecture.md section 9.1, and a list of what to test on the board, step

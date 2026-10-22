@@ -192,7 +192,8 @@ A larger matrix is a grid of identical panels (for example 4 x 2 panels of 32 x 
 order, a number of panels per lane. A panel may be rotated when it is mounted differently. From
 these answers the firmware builds the lookup table once, at every change (`px::layout`, built
 and host tested; the console's `leds canvas`, `leds panel`, `leds layout` and `leds pattern`
-use it until the layout page exists).
+use it until the layout page exists). Before a new layout starts, the lanes of the old one get a
+dark frame, so LEDs a smaller layout no longer reaches go dark.
 
 The web UI draws the panels with the path of the data line and numbers, lights the first LED of
 each lane, and shows a test pattern (each panel's edges in their own colors). The `kfc_fw`

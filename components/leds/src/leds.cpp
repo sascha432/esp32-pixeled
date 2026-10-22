@@ -341,6 +341,12 @@ void set_error(const char *text)
 // the table, the buffers and the lanes of t.layout; on a problem nothing is shown
 void apply_layout()
 {
+    // one dark frame on the old lanes first: LEDs a smaller layout no longer reaches would keep
+    // their last color
+    if (t.lanes_ready && t.frame != nullptr && output::running()) {
+        std::memset(t.frame, 0, t.frame_size);
+        output::show(t.frame, t.frame_size);
+    }
     output::stop();
     t.lanes_ready = false;
     memory::release_large(t.canvas);
