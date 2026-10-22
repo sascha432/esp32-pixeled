@@ -225,10 +225,12 @@ fits every wiring of a board (not built: `main` uses the board's pins as they ar
   hotspot button (`Info::hotspot_button`, button 1 unless the board names another) held while the
   device starts (2 s; `main`, `network::open_hotspot`) opens it without a password, as in the first
   setup: whoever holds the button is at the device.
-  * WLED controller rev 1.1 (the test board): button 4 (BTN3, GPIO 19). Hold it, press the reset
-    button (BTN0, the EN line), keep it down 2 s more; or hold it while the power comes on.
-  * WLED controller rev 1.3: button 1 (BTN0, GPIO 13, no strapping pin; the board has no reset
-    button): held 3 s it restarts the device, kept down through the restart it opens the hotspot.
+  * WLED controller rev 1.1 (the test board, variant `esp32_devkit.wled_controller_rev1_1`):
+    button 4 (BTN3, GPIO 19). Hold it, press the reset button (BTN0, the EN line), keep it down
+    2 s more; or hold it while the power comes on.
+  * WLED controller rev 1.3 (variant `esp32_devkit.wled_controller_rev1_3`): button 1 (BTN0,
+    GPIO 13, no strapping pin; the board has no reset button): held 3 s it restarts the device,
+    kept down through the restart it opens the hotspot.
   * Espressif dev kits: button 1 is BOOT (a strapping pin: held through a reset the chip waits for
     a download), so it is pressed right after the reset, within about 0.8 s (the check runs then
     on the ESP32).

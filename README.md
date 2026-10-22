@@ -81,7 +81,8 @@ Planned ([docs/leds.md](docs/leds.md)):
 | `esp32c6_devkit` | ESP32-C6-DevKitC-1 | 4 |
 
 The default pins are in `components/board/boards/<board>.cpp`; a unit with other wiring is a
-variant ([docs/adding-a-board.md](docs/adding-a-board.md)).
+variant ([docs/adding-a-board.md](docs/adding-a-board.md)). The WLED controller PCB (ESP32) is
+in git as the variants `esp32_devkit.wled_controller_rev1_1` and `esp32_devkit.wled_controller_rev1_3`.
 
 ## Build
 

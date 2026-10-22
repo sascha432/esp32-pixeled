@@ -4,8 +4,11 @@ managed_components/
 __pycache__/
 .vscode/
 
-# one unit's pins and add-ons (docs/adding-a-board.md "Variants"), private to its owner
-boards/*/variants/
+# one unit's pins and add-ons (docs/adding-a-board.md "Variants"), private to its owner; the public
+# WLED controller PCBs are in git
+boards/*/variants/*
+!boards/esp32_devkit/variants/wled_controller_rev1_1/
+!boards/esp32_devkit/variants/wled_controller_rev1_3/
 
 esp32-pixeled.code-workspace
 

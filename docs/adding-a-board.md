@@ -50,7 +50,8 @@ update for another board is refused by it.
 ## Variants
 
 One unit's add-ons or other wiring: a directory `boards/<board>/variants/<variant>/` (lower
-case, digits and `_`; not in git) with
+case, digits and `_`; private, not in git, except the public WLED controller PCBs
+`esp32_devkit.wled_controller_rev1_1` and `esp32_devkit.wled_controller_rev1_3`) with
 
 * `px_board_variant.hpp`: a copy of `components/board/src/variant/px_board_variant.hpp` whose
   `apply()` changes the fields of `Info` that differ (other LED pins, a relay, a motion sensor);

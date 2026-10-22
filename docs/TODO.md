@@ -100,21 +100,25 @@ styles take it. Not tried: the factory reset path (it erases the test board's se
   `wifi pause`). Open: the same with the router really off.
 * The pins of the board are compile-time only (architecture.md section 8.1): a hardware page with
   runtime pins (NVS) for LED lanes, power switch, motion, I2C, LDR, buttons.
-* Test board: the WLED controller PCB on COM4 (variant `esp32_devkit.wled_controller`, not in git),
+* Test board: the WLED controller PCB on COM4 (variant `esp32_devkit.wled_controller_rev1_1`),
   one strip of 32 LEDs on lane 1 (GPIO 27). Flashed 2026-10-19: boots, Wi-Fi, console; the RMT
   output lights the strip (`leds 32 0 0 40`, GRB). The supply MOSFET (GPIO 21) is on while high,
-  not inverted as the old notes said; its indicator LED is lit by the supply. Netlist of the PCB
+  not inverted as the old notes said; its indicator LED is lit by the supply (on the MOSFET, no GPIO: `power_led_gpio` -1). Netlist of the PCB
   (2026-10-21): GPIO 4 goes to the IR receiver footprint (not in `Info`), 2, 5, 12, 17, 18, 23 are
   free; only lanes 1 to 4 have a level shifter.
 * Buttons of the test board (rev 1.1, phase 7, in the variant since 2026-10-21): BTN0 is the
   reset; BTN1 to BTN3 are buttons 2 to 4 on GPIO 35, 34, 19 (rev 1.3's pins, to check); the
   actions and the test steps are at the top. Microphone (INMP441: SD 32, WS 15, SCK 14) in the variant since
   2026-10-21. A rotary encoder: free pins 17, 18, 23 (not wired).
+* Rev 1.3 of the controller (variant `esp32_devkit.wled_controller_rev1_3`, 2026-10-22): the same
+  pins, plus button 1 on GPIO 13 (BTN0, the hotspot button) and a signal LED of its own on GPIO 16
+  (rev 1.1's indicator LED hangs on the MOSFET, no GPIO). Built, nothing of it verified on a
+  rev 1.3 board.
 * Recovery app sizes (2026-10-19): S3 0.93 MB, C3 0.99 MB, C6 1.07 MB. The 4 MB table's factory
   grew to 1.19 MB for the C6 (ota_0 2.25 MB). Shrink the recovery app (no TLS client? log level)
   before the main firmware with the LED engine needs the room.
 
-* Test matrix on COM7 (FTDI, resets on open; ESP32, variant `wled_controller`): lane 1 and 2
+* Test matrix on COM7 (FTDI, resets on open; ESP32, variant `esp32_devkit.wled_controller_rev1_1`): lane 1 and 2
   16x16, lane 3 8x32, 24 x 32 in all; INMP441 fitted. **Keep it below 10 W.** A camera watches
   it. Wiring found with the camera (2026-10-19), every panel first LED top right, zigzag rows:
   `leds canvas 24 32`, `leds panel 1 0 0 16 16 tr rows`, `leds panel 2 0 16 16 16 tr rows`,

@@ -29,6 +29,14 @@ Changed
   has buttons 2 to 4 only (BTN1 darker, BTN2 brighter, BTN3 on/off on GPIO 35, 34, 19) and BTN3 is
   the hotspot button (hold it and press the reset). A button a board does not have is -1 and the
   others keep their number and actions.
+* The WLED controller variants are in git, one per PCB revision: `wled_controller` is now
+  `esp32_devkit.wled_controller_rev1_1` (the test board), and `esp32_devkit.wled_controller_rev1_3`
+  is new: the same pins with all 4 buttons, button 1 on GPIO 13 (BTN0) and the hotspot button, and
+  its signal LED on GPIO 16 (not verified on a rev 1.3 board). Other variants stay private.
+
+Fixed
+
+* WLED controller rev 1.1: no power LED on GPIO 16, its indicator LED hangs on the MOSFET.
 * Docs: the controller's buttons for rev 1.1 and 1.3 as a table in leds.md section 9, the hotspot
   button per board in architecture.md section 9.1, and a list of what to test on the board, step
   by step, in TODO.md.

@@ -451,7 +451,7 @@ settings (section 8.1 there).
   double click action a click waits 0.3 s for the second press. The defaults, made for the WLED
   controller (a button the board does not have stays empty, the others keep their number):
 
-  | Button | Controller rev 1.3 | Rev 1.1 (the test board) | Click | Double click | Hold |
+  | Button | Controller rev 1.3 (`wled_controller_rev1_3`) | Rev 1.1, the test board (`wled_controller_rev1_1`) | Click | Double click | Hold |
   | --- | --- | --- | --- | --- | --- |
   | 1 | GPIO 13, BTN0 | none: BTN0 is the reset (EN) | next animation | - | restart (3 s) |
   | 2 | GPIO 35, BTN1 | GPIO 35, BTN1 | darker | - | darker, repeating |
