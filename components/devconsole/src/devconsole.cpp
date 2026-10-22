@@ -618,7 +618,7 @@ void print_leds_status()
                 s.has_audio ? (s.hears_audio ? " (hears sound)" : " (silence)") : "");
     std::printf("canvas %ux%u, %lu LEDs on %u lanes (%s), supply %s, %u fps, %lu mW%s%s%s\n", s.width, s.height,
                 static_cast<unsigned long>(s.leds), s.lanes,
-                px::leds::config().driver == px::output::Driver::Parallel ? "parallel" : "RMT", s.supply_on ? "on" : "off",
+                s.parallel ? "parallel" : "RMT", s.supply_on ? "on" : "off",
                 s.fps,
                 static_cast<unsigned long>(s.power_mw), s.limited ? " (limited)" : "", s.error[0] != 0 ? ", " : "",
                 s.error);

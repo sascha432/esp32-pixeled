@@ -43,7 +43,7 @@
 #include "soc/i2s_reg.h"
 #include "soc/i2s_struct.h"
 
-namespace px::output::detail::i2s {
+namespace px::output::detail::parallel {
 
 namespace {
 
@@ -457,41 +457,6 @@ std::expected<uint32_t, esp_err_t> encoder_test()
     return longest / (esp_clk_cpu_freq() / 1000000);
 }
 
-} // namespace px::output::detail::i2s
-
-#else
-
-namespace px::output::detail::i2s {
-
-bool supported()
-{
-    return false;
-}
-
-esp_err_t start(const Lane *, size_t)
-{
-    return ESP_ERR_NOT_SUPPORTED;
-}
-
-void stop()
-{
-}
-
-esp_err_t show(const uint8_t *, uint32_t)
-{
-    return ESP_ERR_NOT_SUPPORTED;
-}
-
-uint32_t encoder_max_us()
-{
-    return 0;
-}
-
-std::expected<uint32_t, esp_err_t> encoder_test()
-{
-    return std::unexpected(ESP_ERR_NOT_SUPPORTED);
-}
-
-} // namespace px::output::detail::i2s
+} // namespace px::output::detail::parallel
 
 #endif

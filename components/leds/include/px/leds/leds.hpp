@@ -174,6 +174,9 @@ struct Status {
     uint16_t height;
     uint32_t leds;
     uint8_t lanes;
+    // the lanes go out with the parallel output (false: RMT, also when the setting asks for the
+    // parallel output on a chip without one)
+    bool parallel;
     // the lanes the board has pins for
     uint8_t available_lanes;
     // the brightness the fade has reached

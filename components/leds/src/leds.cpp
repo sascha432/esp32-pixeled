@@ -735,8 +735,9 @@ void handle(const Msg &msg)
         xSemaphoreGive(g_lock);
         save(kKeyConfig, t.config);
         update_mix();
-        // another output: the lanes start again
-        if (t.lanes_ready && output::driver() != t.config.driver) {
+        // another output: the lanes start again (a chip without the parallel output stays on RMT)
+        if (t.lanes_ready && output::driver() != t.config.driver &&
+            (t.config.driver != output::Driver::Parallel || output::parallel_supported())) {
             apply_layout();
         }
         break;
@@ -829,6 +830,7 @@ void publish()
     g_status.height = t.layout.height;
     g_status.leds = static_cast<uint32_t>(t.table.leds);
     g_status.lanes = static_cast<uint8_t>(t.table.lanes);
+    g_status.parallel = t.lanes_ready && output::driver() == output::Driver::Parallel;
     g_status.available_lanes = 0;
     for (size_t i = 0; i < t.start.lane_count && t.start.lane_gpios[i] >= 0; i++) {
         g_status.available_lanes++;
@@ -880,7 +882,10 @@ void task(void *)
             counted = false;
         }
         if (start >= next_us) {
-            next_us = start + 1000000 / (t.config.fps > 0 ? t.config.fps : 1);
+            // a fixed cadence: the wake-up comes up to a tick late, which must not add to the
+            // period (90 instead of 100 fps); after a long frame or a pause it counts from now
+            const int64_t period = 1000000 / (t.config.fps > 0 ? t.config.fps : 1);
+            next_us = start - next_us < period ? next_us + period : start + period;
             render_frame(start);
         }
         publish();

@@ -1,8 +1,8 @@
 # PixeLED - TODO
 
 State 2026-10-21: phases 1 (skeleton), 3 (render task, layout, web pages) and 5 (Home
-Assistant) built and running on the test matrix; phase 2 has RMT and the ESP32 I2S output with
-its DMA ring; phase 6 has the microphone, WARLS and WLED audio sync (approved with music); phase
+Assistant) built and running on the test matrix; phase 2 has RMT and the ESP32 I2S and S3 LCD_CAM
+outputs with their DMA ring; phase 6 has the microphone, WARLS and WLED audio sync (approved with music); phase
 4 has 13 animations, the crossfade, palettes and presets; phase 7 the buttons and the encoder;
 phase 8 the live preview and the overlay ([leds.md](leds.md) section 11).
 
@@ -115,9 +115,12 @@ styles take it. Not tried: the factory reset path (it erases the test board's se
   (rev 1.1's indicator LED hangs on the MOSFET, no GPIO). Built, nothing of it verified on a
   rev 1.3 board.
 * S3 test board: the AI-S3 (ESP32-S3 N16R8) on COM8, variant `esp32s3_devkit.ai_s3_test` (in git,
-  adding-a-board.md "Clones"), 2026-10-22. Strips on lanes 1 to 4 (GPIO 4 to 7, 4 x 1024 in the
-  layout) light with RMT; lanes 5 to 8 wait for the S3 parallel output (LCD_CAM), the S3 has 4 RMT
-  TX channels. Its 5Vin pin has no USB 5 V while the jumper IN-OUT is open.
+  boards.md), 2026-10-22. Strips on lanes 1 to 4 (GPIO 4 to 7, 4 x 1024 in the
+  layout) light with RMT and with the S3 parallel output (LCD_CAM, 2026-10-22: 29 fps); all 8 lanes with
+  LCD_CAM (8 x 32 at 100 fps, smooth, checked by the user; RMT has 4 TX channels on the S3). Its 5Vin pin has no USB 5 V while the jumper IN-OUT is open.
+* C3 test board: the AI-C3 (ESP32-C3-MINI-1, 4 MB) on COM12, variant `esp32c3_devkit.ai_c3_test`
+  (in git, boards.md), 2026-10-22. Boots, hotspot up; open: a strip on lanes 1
+  and 2 (GPIO 4, 5), the GPIO of its RGB LED (8?), the 5V pins with power from USB.
 * Recovery app sizes (2026-10-19): S3 0.93 MB, C3 0.99 MB, C6 1.07 MB. The 4 MB table's factory
   grew to 1.19 MB for the C6 (ota_0 2.25 MB). Shrink the recovery app (no TLS client? log level)
   before the main firmware with the LED engine needs the room.
@@ -149,8 +152,12 @@ styles take it. Not tried: the factory reset path (it erases the test board's se
   three crashes in a row start the LEDs off with RMT. A real crash (console `crash yes`) restarts
   with reason panic (2026-10-21); the count of three not tried yet.
 
-* Spike per chip: S3 LCD_CAM 8/16 lanes, ESP32 I2S1 LCD mode with a DMA ring, RMT, C6 PARLIO.
-  Measure fps, CPU load and glitches under Wi-Fi load with a logic analyzer.
+* S3 LCD_CAM parallel driver built (2026-10-22, the ESP32's ring on GDMA): 4 x 1024 LEDs at
+  29 fps on the AI-S3, the encoder 116 us per buffer for 4 lanes; 8 lanes with LEDs smooth by
+  eye (2026-10-22). Open: lanes 9 to 16 with LEDs, glitches under Wi-Fi load and during flash
+  writes (logic analyzer).
+* Spike for the C6 (PARLIO). Measure fps, CPU load and glitches under Wi-Fi load with a logic
+  analyzer.
 * `px::output` interface, lanes with their own pixel counts and color order.
 
 ## Phase 3: render task and layout (done 2026-10-19, open points)

@@ -17,6 +17,9 @@
 - **Docs with every change.** Update the affected `docs/*.md` (architecture, leds, adding-a-board,
   the pages under `docs/ui/web`) in the same commit as the code. Check `docs/TODO.md`:
   mark items done or changed, add new open points, update the state lines.
+- **Boards page with every board change.** `docs/boards.md` describes every board and variant with
+  its GPIOs (lanes, supply, sensors, buttons, microphone, taken pins, photos of clones). A new or
+  changed board, variant or pin changes it in the same commit, and the board's code points there.
 - **Changelog with every change.** `docs/CHANGELOG.md`: an entry under today's date (newest
   first, inside the unreleased version), under Added, Changed, Fixed or Removed, saying what a
   user or developer sees. A change that reverses an entry of the same day replaces it instead of

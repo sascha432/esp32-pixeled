@@ -90,8 +90,9 @@ is the dependency rule: a component that does not list another cannot include it
               +-----------+     +-----------------------+
 ```
 
-Built: `leds` (the render task), `output` (RMT), `layout`, `effects`. Not built yet: the parallel
-outputs, `mqtt` and `audio` ([leds.md](leds.md), [TODO.md](TODO.md)).
+Built: `leds` (the render task), `output` (RMT, the parallel outputs of the ESP32 and the S3),
+`layout`, `effects`. Not built yet: the C6's parallel output (PARLIO) ([leds.md](leds.md),
+[TODO.md](TODO.md)).
 
 | Component | Depends on | Pure (host build) | Responsibility |
 | --- | --- | --- | --- |
@@ -103,7 +104,7 @@ outputs, `mqtt` and `audio` ([leds.md](leds.md), [TODO.md](TODO.md)).
 | `webserver` | `esp_http_server`, `network`, `ota` | no | Captive portal, login, setup, status, Wi-Fi, update, files, log and backup API; the web UI from LittleFS (section 9.4) |
 | `ota` | `app_update`, `board` | no | Firmware and file system updates, rollback, the recovery app switch (section 9.5) |
 | `board` | `esp_driver_i2c` | no | The constants of the board (pins of a new device), the image tag, the shared I2C bus (section 8) |
-| `output` | `esp_driver_rmt` | no | The LED lanes: the RMT backend ([leds.md](leds.md) section 2.2) |
+| `output` | `esp_driver_rmt`, `esp_driver_dma` | no | The LED lanes: the RMT backend, the parallel backends (ESP32 I2S, S3 LCD_CAM) ([leds.md](leds.md) section 2.2) |
 | `layout` | `memory` | yes | Canvas and panels, the table canvas -> LED ([leds.md](leds.md) section 4.1) |
 | `effects` | nothing | yes | The animations: canvas, parameters, time, the memory between frames, the rotation, the audio for the reactive ones ([leds.md](leds.md) section 6) |
 | `leds` | `effects`, `layout`, `output`, `platform` | `frame.cpp` | The render task: state, fade, gamma, power limit, the supply, NVS ([leds.md](leds.md) section 3) |
@@ -150,8 +151,9 @@ Rules:
 
 ## 5. LED engine
 
-The render task, the layout, the first animations and the RMT output are built; the design and
-what is still open (parallel drivers, presets, audio, MQTT) are in [leds.md](leds.md).
+The render task, the layout, the animations, the RMT output and the parallel outputs of the ESP32
+and the S3 are built; the design and what is still open (the C6's PARLIO output, playlists) are
+in [leds.md](leds.md).
 
 ## 6. MQTT and Home Assistant discovery
 
@@ -177,6 +179,8 @@ and the pins of the optional hardware of a new device. `-1` is a pin that is not
 | `esp32_devkit` | ESP32 | 4 MB, none | 8: 13, 14, 16, 17, 18, 19, 23, 25 | 4mb.csv |
 | `esp32c3_devkit` | ESP32-C3 | 4 MB, none | 2: 4, 5 | 4mb.csv |
 | `esp32c6_devkit` | ESP32-C6 | 8 MB (4 used), none | 4: 18, 19, 20, 21 | 4mb.csv |
+
+All pins of each board and variant, with photos of the clones: [boards.md](boards.md).
 
 * **Selection**: a Kconfig choice (`components/board/Kconfig`, `PX_BOARD_*`) set by
   `boards/<name>/sdkconfig.defaults`, which also sets the target, flash, PSRAM and partition
@@ -428,6 +432,7 @@ esp32-pixeled/
     leds.md                      the LED engine: drivers, layout, animations, MQTT, plan
     TODO.md, CHANGELOG.md
     adding-a-board.md            how to add a board or a variant
+    boards.md                    every board and variant with its GPIOs
     ui/web/                      the web UI: pages, design rules, recovery page
 ```
 

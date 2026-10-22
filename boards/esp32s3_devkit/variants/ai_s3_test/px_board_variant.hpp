@@ -5,7 +5,7 @@
 // 8 MB embedded octal PSRAM (S3R8), 40 MHz crystal. The board's sdkconfig.defaults fit as they are.
 // Not usable: GPIO 26 to 32 (flash), 33 to 37 (octal PSRAM), 19 and 20 (USB), 43 and 44 (UART0),
 // 0, 3, 45 and 46 (strapping). The RGB LED is a WS2812 on GPIO 48 (connected through a 0 Ohm
-// resistor at "RGB"), not driven. Photo and pin headers: docs/adding-a-board.md "Clones".
+// resistor at "RGB"), not driven. Photo and pin headers: docs/boards.md.
 //
 // No sensors, no relay: only the 8 LED lanes, on the pins that sit next to each other on the left
 // header (after 3V3, 3V3, RST): 4, 5, 6, 7, 15, 16, 17, 18.

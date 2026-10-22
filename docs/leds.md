@@ -47,12 +47,12 @@ the C3 and C6 are for small installations (1000 to 2000 LEDs).
 
 ### 2.2 Drivers per chip
 
-One interface (`px::output`; the RMT backend is built, the parallel ones not): configure the lanes (pin, pixel count, color order),
+One interface (`px::output`; RMT and the parallel backends of the ESP32 and the S3 are built): configure the lanes (pin, pixel count, color order),
 hand it a frame, get a callback when it is out. Behind it one backend per chip:
 
 | Chip | Parallel backend | Lanes | Fallback |
 | --- | --- | --- | --- |
-| ESP32-S3 | LCD_CAM in i80 mode: 8 or 16 data lines, GDMA, frame buffers in PSRAM | 8 / 16 | RMT, 4 channels |
+| ESP32-S3 | LCD_CAM in i80 mode: 16 data lines, GDMA from a ring of small buffers in internal RAM, encoded while sending | 16 | RMT, 4 channels |
 | ESP32 | I2S1 in LCD mode: 8 data lines, DMA from a ring of small buffers in internal RAM, encoded while sending | 8 | RMT, 8 channels |
 | ESP32-C6 | PARLIO TX (lane count to verify) | up to 8 | RMT, 2 channels |
 | ESP32-C3 | none | | RMT, 2 channels |
@@ -61,7 +61,15 @@ hand it a frame, get a callback when it is out. Behind it one backend per chip:
   low). For 8 lanes one slot is a byte with one bit per lane, so a pixel row of all lanes is
   24 x 3 = 72 bytes; 1024 pixels per lane are 74 KB per frame (148 KB for 16 lanes). The bits are
   transposed with a lookup table.
-* **S3**: the frame is encoded into one of two DMA buffers in PSRAM while the other is sent.
+* **S3** (built 2026-10-22, `components/output/src/lcd_output.cpp`): LCD_CAM in i80 mode, 16-bit
+  samples, bit n on lane n (data lines 0 to 15), no WR, DC or CS pin (ESP-IDF's i80 driver needs
+  them, so the backend sets the registers itself). 2.42 MHz: the 160 MHz PLL / 2 / 33, integer
+  dividers (a slot 0.41 us, a bit 1.24 us). The same ring as on the ESP32: 4 buffers of 24
+  positions in internal DMA memory, refilled from the GDMA EOF interrupt (cache safe, level 3),
+  then the latch, after which the LCD stops by itself; a frame in the PSRAM is copied to internal
+  RAM first. Measured on the AI-S3 board: 4 x 1024 LEDs 31.2 ms a frame (29 fps with the render
+  task, the theory 30.7 ms), the encoder 116 us per buffer for 4 lanes (`leds bench encode`), as
+  on the ESP32. 8 lanes of 32 LEDs: 1.4 ms a frame, 100 fps, smooth.
 * **ESP32** (built, `components/output/src/i2s_output.cpp`): I2S0 in LCD mode, 16-bit samples,
   bit n on lane n (data lines 8 to 23 of the GPIO matrix), 2.4 MHz from the 160 MHz PLL. The frame
   is encoded while it is sent (built 2026-10-21): a ring of 4 buffers in internal DMA memory, 24
@@ -511,8 +519,8 @@ settings (section 8.1 there).
 ## 11. Phases
 
 1. Skeleton from esp32-hassctrl: build for all four boards, web UI, update, recovery (done).
-2. Driver spike and `px::output`: RMT (done: 768 LEDs on 3 lanes at 127 fps on the ESP32), then
-   ESP32 I2S, S3 LCD_CAM, PARLIO.
+2. Driver spike and `px::output`: RMT (done: 768 LEDs on 3 lanes at 127 fps on the ESP32), ESP32
+   I2S (done 2026-10-21), S3 LCD_CAM (done 2026-10-22), then PARLIO.
 3. Render task, layout and its lookup table, brightness, gamma, power limit, test pattern, the
    layout page of the web UI (done, 2026-10-19).
 4. Animations, palettes, crossfade, presets (palettes and presets built 2026-10-21) and

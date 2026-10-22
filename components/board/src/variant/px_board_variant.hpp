@@ -2,7 +2,7 @@
 // of this file in boards/<board>/variants/<name>/ (not in git) changes the fields of the board's
 // Info that differ on that unit. tools/build.py <board>.<name> puts the copy on the include path
 // instead of this one, which changes nothing. apply() runs at compile time: no cost in the
-// firmware.
+// firmware. A variant in git gets its section in docs/boards.md.
 #pragma once
 
 #include "px/board/board.hpp"

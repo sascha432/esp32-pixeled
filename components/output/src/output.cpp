@@ -43,7 +43,7 @@ void reorder(ColorOrder order, const uint8_t *rgb, uint8_t *out, size_t pixels)
 
 bool parallel_supported()
 {
-    return detail::i2s::supported();
+    return detail::parallel::supported();
 }
 
 esp_err_t start(const Lane *lanes, size_t count, Driver driver)
@@ -54,7 +54,7 @@ esp_err_t start(const Lane *lanes, size_t count, Driver driver)
         ESP_LOGW(kTag, "no parallel output on this chip, RMT instead");
         driver = Driver::Rmt;
     }
-    const esp_err_t err = driver == Driver::Parallel ? detail::i2s::start(lanes, count) : detail::rmt::start(lanes, count);
+    const esp_err_t err = driver == Driver::Parallel ? detail::parallel::start(lanes, count) : detail::rmt::start(lanes, count);
     if (err != ESP_OK) {
         return err;
     }
@@ -72,7 +72,7 @@ void stop()
         return;
     }
     if (g_driver == Driver::Parallel) {
-        detail::i2s::stop();
+        detail::parallel::stop();
     } else {
         detail::rmt::stop();
     }
@@ -110,7 +110,7 @@ size_t pixel_count()
 
 uint32_t encoder_max_us()
 {
-    return g_count > 0 && g_driver == Driver::Parallel ? detail::i2s::encoder_max_us() : 0;
+    return g_count > 0 && g_driver == Driver::Parallel ? detail::parallel::encoder_max_us() : 0;
 }
 
 std::expected<uint32_t, esp_err_t> encoder_test()
@@ -121,14 +121,14 @@ std::expected<uint32_t, esp_err_t> encoder_test()
     if (g_driver != Driver::Parallel) {
         return std::unexpected(ESP_ERR_NOT_SUPPORTED);
     }
-    return detail::i2s::encoder_test();
+    return detail::parallel::encoder_test();
 }
 
 esp_err_t show(const uint8_t *rgb, size_t length, uint32_t timeout_ms)
 {
     ESP_RETURN_ON_FALSE(g_count > 0, ESP_ERR_INVALID_STATE, kTag, "not started");
     ESP_RETURN_ON_FALSE(length >= pixel_count() * 3, ESP_ERR_INVALID_SIZE, kTag, "frame too short");
-    return g_driver == Driver::Parallel ? detail::i2s::show(rgb, timeout_ms) : detail::rmt::show(rgb, timeout_ms);
+    return g_driver == Driver::Parallel ? detail::parallel::show(rgb, timeout_ms) : detail::rmt::show(rgb, timeout_ms);
 }
 
 } // namespace px::output

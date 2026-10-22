@@ -11,10 +11,15 @@ and what is gone under Removed. Updated in the same commit as the change ([CLAUD
 
 Added
 
-* docs/adding-a-board.md "Clones": the AI-S3 board (ESP32-S3 N16R8) with a photo, a pinout
-  image (GPIO and LED lane of every pin), the GPIO of its RGB LED (48) and its solder jumpers; it runs
-  the `esp32s3_devkit` firmware. Its variant `esp32s3_devkit.ai_s3_test` (8 lanes on GPIO 4 to 7
-  and 15 to 18, no relay or sensors) is in git as an example.
+* Parallel LED output on the ESP32-S3 (LCD_CAM): up to 16 lanes from one DMA stream, encoded
+  into a small ring while sending, as on the ESP32; no extra pins. 4 x 1024 LEDs at 29 fps on
+  the AI-S3. It is the default driver on the S3; RMT stays a choice.
+* docs/boards.md: every board and variant with its GPIOs (LED lanes, supply, sensors, buttons,
+  microphone, taken pins), with the clones AI-S3 (ESP32-S3 N16R8: photo, pinout image, RGB LED on
+  GPIO 48, the solder jumpers) and AI-C3 (ESP32-C3-MINI-1: photo, pin headers). Their variants
+  `esp32s3_devkit.ai_s3_test` (8 lanes on GPIO 4 to 7 and 15 to 18) and
+  `esp32c3_devkit.ai_c3_test` (2 lanes on GPIO 4 and 5), without relay or sensors, are in git as
+  examples.
 * Time page: "Custom rule (POSIX TZ)" in the zone list, a text field for a rule of its own when the
   firmware's IANA table is out of date. `/api/time` takes a rule as `zone` and reports `rule`; the
   backup keeps either.
@@ -40,6 +45,10 @@ Changed
 
 Fixed
 
+* The render task keeps the set frame rate: the frames follow a fixed cadence, so a wake-up a
+  tick late no longer adds to the period (100 fps set gave 90 on the S3, 94 on the ESP32).
+* `leds` on the console names the driver that sends (it said "parallel" on chips that fall back to
+  RMT). On the C3 and C6 a changed setting no longer restarts the output.
 * A smaller layout (fewer LEDs or lanes) leaves no LEDs lit at the end of a strip: the old
   lanes get one dark frame before the new layout starts.
 * WLED controller rev 1.1: no power LED on GPIO 16, its indicator LED hangs on the MOSFET.

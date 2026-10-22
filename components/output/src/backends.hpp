@@ -22,8 +22,10 @@ void stop();
 esp_err_t show(const uint8_t *rgb, uint32_t timeout_ms);
 } // namespace rmt
 
-namespace i2s {
-// false on chips without the I2S LCD mode (only the ESP32 has it)
+// The chip's parallel output: I2S in LCD mode on the ESP32 (i2s_output.cpp), LCD_CAM on the S3
+// (lcd_output.cpp), none on the others (parallel_none.cpp).
+namespace parallel {
+// false on chips without one
 bool supported();
 constexpr size_t kMaxLanes = 16;
 esp_err_t start(const Lane *lanes, size_t count);
@@ -32,6 +34,6 @@ esp_err_t show(const uint8_t *rgb, uint32_t timeout_ms);
 // px::output::encoder_max_us(), encoder_test()
 uint32_t encoder_max_us();
 std::expected<uint32_t, esp_err_t> encoder_test();
-} // namespace i2s
+} // namespace parallel
 
 } // namespace px::output::detail

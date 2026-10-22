@@ -25,8 +25,9 @@ Built:
 * Backup of the settings in one YAML file (settings and presets parts).
 * Settings in NVS by one write policy: live changes 10 s after the last one (at most 60 s), saves
   and secrets at once.
-* LED output: parallel by DMA on the ESP32 (I2S, up to 16 lanes, encoded into a small ring while
-  sending; 8 x 1024 LEDs at 32 fps), RMT on the other chips or by choice.
+* LED output: parallel by DMA on the ESP32 (I2S) and the ESP32-S3 (LCD_CAM), up to 16 lanes,
+  encoded into a small ring while sending (8 x 1024 LEDs at 32 fps); RMT on the C3 and C6 or by
+  choice.
 * Layout from three answers per panel (size, first LED, rows or columns with zigzag), the web
   page draws the data path; test pattern "edges".
 * Render task: animations solid, rainbow, plasma, breathe, fire, gradient, color fade, twinkle,
@@ -65,7 +66,7 @@ Built:
 
 Planned ([docs/leds.md](docs/leds.md)):
 
-* Parallel LED output on the S3 (LCD_CAM) and the C6 (PARLIO).
+* Parallel LED output on the C6 (PARLIO).
 * Custom shapes compiled in.
 * Playlists.
 * Realtime input: DDP, E1.31, Art-Net.
@@ -83,8 +84,8 @@ Planned ([docs/leds.md](docs/leds.md)):
 The default pins are in `components/board/boards/<board>.cpp`; a unit with other wiring is a
 variant ([docs/adding-a-board.md](docs/adding-a-board.md)). The WLED controller PCB (ESP32) is
 in git as the variants `esp32_devkit.wled_controller_rev1_1` and `esp32_devkit.wled_controller_rev1_3`.
-Clones of the dev kits, e.g. the AI-S3 (ESP32-S3 N16R8, `esp32s3_devkit`, example variant
-`esp32s3_devkit.ai_s3_test`), are in [docs/adding-a-board.md](docs/adding-a-board.md) ("Clones").
+Every board and variant with its GPIOs, including the clones AI-S3 and AI-C3 (example variants
+`esp32s3_devkit.ai_s3_test`, `esp32c3_devkit.ai_c3_test`), is in [docs/boards.md](docs/boards.md).
 
 ## Build
 

@@ -5,8 +5,8 @@
 // it exists the console's `leds` command); nothing here is thread safe.
 //
 // Backends: RMT, one channel per lane (every chip; the ESP32 has 8 TX channels, the S3 4, the C3
-// and C6 2), and the parallel output: the ESP32's I2S0 in LCD mode, all lanes from one DMA stream,
-// no interrupt per pixel. LCD_CAM (S3) and PARLIO (C6) are not built yet.
+// and C6 2), and the parallel output: the ESP32's I2S0 in LCD mode or the S3's LCD_CAM, all lanes
+// from one DMA stream, no interrupt per pixel. PARLIO (C6) is not built yet.
 
 #include <cstddef>
 #include <cstdint>

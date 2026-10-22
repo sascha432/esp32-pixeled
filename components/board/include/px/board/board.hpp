@@ -57,7 +57,8 @@ constexpr ButtonPins buttons(std::initializer_list<int8_t> pins)
 // The constants of a board type. A variant of the board, one unit's add-ons (a relay, a motion
 // sensor, other LED pins), is a private copy of px_board_variant.hpp in
 // boards/<board>/variants/<name>/ whose apply() changes the fields below (docs/adding-a-board.md
-// "Variants"). -1 is a pin that is not there.
+// "Variants"). -1 is a pin that is not there. docs/boards.md lists the pins of every board and
+// variant: a change here or in a board's Info changes it too.
 struct Info {
     const char *name;
     // the variant this firmware was built for (px::board::variant::apply), nullptr: the board as

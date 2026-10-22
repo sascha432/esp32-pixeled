@@ -5,11 +5,12 @@ __pycache__/
 .vscode/
 
 # one unit's pins and add-ons (docs/adding-a-board.md "Variants"), private to its owner; the public
-# WLED controller PCBs and the AI-S3 example are in git
+# WLED controller PCBs and the AI-S3 and AI-C3 examples are in git
 boards/*/variants/*
 !boards/esp32_devkit/variants/wled_controller_rev1_1/
 !boards/esp32_devkit/variants/wled_controller_rev1_3/
 !boards/esp32s3_devkit/variants/ai_s3_test/
+!boards/esp32c3_devkit/variants/ai_c3_test/
 
 esp32-pixeled.code-workspace
 
