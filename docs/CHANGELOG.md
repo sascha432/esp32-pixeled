@@ -16,6 +16,12 @@ Changed
   of options a firmware lacks.
 * Web files carry the image's ETag: a browser that has them gets 304 instead of the files.
 
+Fixed
+
+* Web UI, Time: the time zone and its rule ran together ("America/VancouverMST7"), the space
+  between them is back. The JS minifier squeezed the text of a template literal
+  inside `${...}`; `tools/build_web.py` now passes template literals through unchanged.
+
 ### 2026-10-22
 
 Added
