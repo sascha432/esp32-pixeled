@@ -424,6 +424,7 @@ esp32-pixeled/
   web/                           the web UI (index.html, app.js, app.css, vendor/bootstrap.min.css)
   tools/
     build.py, build_fs.py, update.py   firmware, file system image, update over the network
+    build_web.py                       the web files for one firmware (board-only pages left out, Bootstrap purged, minified)
     host_test.py, msvc.py              host tests (msvc.py finds MSVC, cmake, ninja)
     test_web.py                        the web API against a device
     build_timezones.py                 the zone table, generated and committed

@@ -1,5 +1,6 @@
 // The web UI of pixeled (docs/ui/web/web-app.md): one page, the views follow the hash (#/wifi). Plain
-// JavaScript, no framework and no build step; Bootstrap 5.3 only as CSS. Everything comes from the
+// JavaScript, no framework; Bootstrap 5.3 only as CSS. tools/build_web.py drops the `// #if CONFIG_*`
+// blocks of options the firmware lacks (none yet) and minifies the file. Everything comes from the
 // device API (components/webserver). Texts from outside (network names) are escaped.
 "use strict";
 

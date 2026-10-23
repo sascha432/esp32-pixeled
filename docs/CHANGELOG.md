@@ -7,6 +7,15 @@ and what is gone under Removed. Updated in the same commit as the change ([CLAUD
 
 ## Unreleased (0.1.0)
 
+### 2026-10-23
+
+Changed
+
+* Web image: `tools/build_web.py` keeps only the Bootstrap rules in use and minifies JS and CSS
+  (about 30 KB less to load per page); `// #if CONFIG_*` blocks in the JS can leave out the pages
+  of options a firmware lacks.
+* Web files carry the image's ETag: a browser that has them gets 304 instead of the files.
+
 ### 2026-10-22
 
 Added
