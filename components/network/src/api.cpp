@@ -171,6 +171,14 @@ esp_err_t set_hotspot(bool on)
     return command(MsgType::Hotspot, 0, on ? 1 : 0);
 }
 
+void set_power_save(bool on)
+{
+    // before start() the task applies the value when it starts the driver
+    if (g_power_save.exchange(on) != on && g_queue != nullptr) {
+        command(MsgType::PowerSave);
+    }
+}
+
 esp_err_t new_hotspot_password()
 {
     return command(MsgType::NewHotspotPassword);

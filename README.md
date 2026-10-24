@@ -12,7 +12,8 @@ The design is in [docs/architecture.md](docs/architecture.md) (infrastructure) a
 
 Built:
 
-* Wi-Fi with up to 5 networks, entered order or strongest signal, roaming on a weak signal.
+* Wi-Fi with up to 5 networks, entered order or strongest signal, roaming on a weak signal;
+  modem sleep while the LEDs are off.
 * Hotspot with a captive portal for the first setup (open while setting up), mDNS
   `<device>.local`.
 * Headless recovery: the hotspot opens after 5 minutes without Wi-Fi, or open when the board's

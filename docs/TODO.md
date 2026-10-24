@@ -98,6 +98,10 @@ styles take it. Not tried: the factory reset path (it erases the test board's se
   the hotspot (password), the board's hotspot button held at boot opens it without one (button 4
   on the test board). Both tried 2026-10-22 (the button by the user, the 5 minutes with
   `wifi pause`). Open: the same with the router really off.
+* Modem sleep while the LEDs are off: built 2026-10-23 (architecture.md section 9.2), switched
+  with the supply; ping 13 ms on, 80 ms off on the test board; idle current at 5 V from 70 to 80 mA
+  down to 15 to 25 mA (measured by the user). Open: a firmware upload and the web UI with the
+  LEDs off, and realtime input (when built) waking it before its first frame.
 * The pins of the board are compile-time only (architecture.md section 8.1): a hardware page with
   runtime pins (NVS) for LED lanes, power switch, motion, I2C, LDR, buttons.
 * Test board: the WLED controller PCB on COM4 (variant `esp32_devkit.wled_controller_rev1_1`),

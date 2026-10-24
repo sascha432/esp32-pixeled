@@ -11,6 +11,9 @@ and what is gone under Removed. Updated in the same commit as the change ([CLAUD
 
 Changed
 
+* Wi-Fi modem sleep while the LEDs are off: on the ESP32 test board the idle current at 5 V drops
+  from 70 to 80 mA to 15 to 25 mA, and the device answers up to about 100 ms later (ping 80 ms
+  instead of 13 ms on average). With the LEDs on power save stays off as before.
 * Web image: `tools/build_web.py` keeps only the Bootstrap rules in use and minifies JS and CSS
   (about 30 KB less to load per page); `// #if CONFIG_*` blocks in the JS can leave out the pages
   of options a firmware lacks.

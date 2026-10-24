@@ -36,6 +36,7 @@ Task t;
 QueueHandle_t g_queue = nullptr;
 // set by the shutdown handler: the disconnect of a restart is not a lost connection
 volatile bool g_restarting = false;
+std::atomic<bool> g_power_save{false};
 SemaphoreHandle_t g_lock = nullptr;
 
 // copies for other tasks, guarded by g_lock
@@ -205,6 +206,16 @@ void handle_wifi_event(int32_t event, uint8_t reason)
     }
 }
 
+// Modem sleep as set_power_save last asked. With the hotspot on the driver keeps the radio awake
+// anyway (an access point cannot sleep).
+void apply_power_save()
+{
+    const bool on = g_power_save.load();
+    if (esp_wifi_set_ps(on ? WIFI_PS_MIN_MODEM : WIFI_PS_NONE) == ESP_OK) {
+        ESP_LOGI(kTag, "modem sleep %s", on ? "on" : "off");
+    }
+}
+
 void handle(const Msg &msg)
 {
     switch (msg.type) {
@@ -270,6 +281,9 @@ void handle(const Msg &msg)
         xSemaphoreGive(job.done);
         break;
     }
+    case MsgType::PowerSave:
+        apply_power_save();
+        break;
     case MsgType::WifiEvent:
         handle_wifi_event(msg.event, msg.reason);
         break;
@@ -457,10 +471,10 @@ esp_err_t start(const char *device_name, Listener listener, void *context)
     ESP_RETURN_ON_FALSE(xTaskCreate(task, "network", 4096, nullptr, 5, nullptr) == pdPASS, ESP_ERR_NO_MEM, kTag,
                         "task");
     ESP_RETURN_ON_ERROR(esp_wifi_start(), kTag, "wifi start");
-    // No modem sleep: with it every packet waits for the next beacon (ping 18 to 200 ms, single
-    // web requests up to seconds on the T4). The panels run on mains power; a battery remote
-    // will need its own choice here.
-    esp_wifi_set_ps(WIFI_PS_NONE);
+    // Modem sleep only while the LEDs are off (set_power_save): with it every packet waits for the
+    // next beacon (ping 18 to 200 ms, single web requests up to seconds on the T4), too slow for
+    // realtime input and live controls.
+    apply_power_save();
     ESP_LOGI(kTag, "%u saved networks, hotspot '%s' %s", t.stored.count, device_name,
              t.status.hotspot_on ? "on" : "off");
     return ESP_OK;

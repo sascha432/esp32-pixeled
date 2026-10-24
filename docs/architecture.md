@@ -274,8 +274,13 @@ fits every wiring of a board (not built: `main` uses the board's pins as they ar
   reset for a few seconds and does not answer its new login in time (reason 2). The first retry
   comes after 1 s and goes to the same network. A network saved without a password against a
   secured one ends in reason 210, shown as "the network needs a password, add it again".
-* Wi-Fi power save is off: the controllers run on mains power, and realtime input
-  ([leds.md](leds.md) section 7) needs every packet at once.
+* Wi-Fi power save (modem sleep, `WIFI_PS_MIN_MODEM`) only while the LEDs are off: main switches
+  it with the LED supply (`network::set_power_save`). The radio then sleeps between the router's
+  beacons; on the ESP32 test board the idle current at 5 V drops from 70 to 80 mA to 15 to 25 mA,
+  ping goes from 13 ms to 80 ms on average (up to 150 ms), and
+  every packet, a command to switch the LEDs on included, waits up to a beacon interval. While the
+  LEDs are on it is off: realtime input ([leds.md](leds.md) section 7) and live controls need every
+  packet at once. With the hotspot on, the driver keeps the radio awake anyway.
 
 ### 9.3 Storage
 

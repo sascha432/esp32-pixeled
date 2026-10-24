@@ -5,6 +5,7 @@
 // the network task touches `t`; other tasks read the copies under g_lock.
 
 #include <algorithm>
+#include <atomic>
 #include <cstring>
 
 #include "esp_netif.h"
@@ -39,6 +40,7 @@ enum class MsgType : uint8_t {
     OpenHotspot,
     Pause,
     Import,
+    PowerSave,
     WifiEvent,
     GotIp,
 };
@@ -134,6 +136,8 @@ extern Task t;
 extern QueueHandle_t g_queue;
 // set by the shutdown handler: the disconnect of a restart is not a lost connection
 extern volatile bool g_restarting;
+// set_power_save's last value, also before the task runs
+extern std::atomic<bool> g_power_save;
 extern SemaphoreHandle_t g_lock;
 
 // copies for other tasks, guarded by g_lock

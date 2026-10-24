@@ -171,6 +171,11 @@ constexpr uint32_t kMaxPauseS = 3600;
 esp_err_t pause(uint32_t seconds);
 esp_err_t set_hotspot(bool on);
 esp_err_t new_hotspot_password();
+// Modem sleep (docs/architecture.md section 9.2): the radio sleeps between the router's beacons,
+// which lowers the idle current, and every packet to the device waits up to a beacon
+// interval (about 100 ms). Off by default; main turns it on while the LEDs are off. May be called
+// before start(), the last value applies.
+void set_power_save(bool on);
 
 const char *state_name(StaState state);
 

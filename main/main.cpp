@@ -140,7 +140,7 @@ void start_hardware(const px::board::Info &board, const px::board::Handles &hand
 }
 
 // The render task (docs/leds.md section 3) on the board's LED pins; the supply and its indicator
-// LED are relays 1 and 2.
+// LED are relays 1 and 2. While the supply is off the Wi-Fi uses modem sleep.
 void start_leds(const px::board::Info &board)
 {
     const px::leds::Start start{
@@ -150,6 +150,7 @@ void start_leds(const px::board::Info &board)
             [](bool on) {
                 px::relay::set(1, on);
                 px::relay::set(2, on);
+                px::network::set_power_save(!on);
             },
         .has_motion = px::motion::running(),
         .set_motion_hold = px::motion::running() ? px::motion::set_hold_s : nullptr,

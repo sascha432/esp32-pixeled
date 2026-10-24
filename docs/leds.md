@@ -226,6 +226,7 @@ A 7-segment clock is a shape with segment groups: the digits are a mask over any
 
 * The supply relay or MOSFET (`board::Info::power_gpio`) is off while the board starts, switched
   on before the first frame with a settle time (a setting), and off after the LEDs faded out.
+  While it is off the Wi-Fi uses modem sleep ([architecture.md](architecture.md) section 9.2).
 * Forced off in the panic handler (built 2026-10-21: `relay::off_at_crash` for relays 1 and 2;
   the wrapped `esp_panic_handler` writes the pins' registers before it prints; the console's
   `crash yes` tries it; the panic and the restart tried on the test matrix with the LEDs off, the
