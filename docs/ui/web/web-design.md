@@ -111,12 +111,12 @@ Helpers of `app.js`:
 | Helper | What it does |
 | --- | --- |
 | `api(path, form)` | GET, or POST with an object (form encoded) or a `FormData` (files); JSON answers; a 401 leads to the login; an error answer throws with the device's `error` text |
-| `render(html)` | puts the page into `#page` and scrolls to the top |
+| `render(html)` | puts the page into `#page` and scrolls to the top; returns the page's handle, whose `live(path, onData)` follows a GET for this page only (a view left while it loads does not follow after the next page) |
 | `card(title, body)` | a Bootstrap card with a small title (`h2.h6`) |
 | `facts(rows)` | a two-column list of names and values (`dl.facts`) |
 | `busy(button, action)` | disables the button while `action` runs; an error becomes a red toast |
 | `toast(text, kind)` | a short message at the bottom center for 4 s (`success`, `danger`, `warning`, `secondary`) |
-| `live(path, onData)` | follows the GET `path` on the live socket (web-app.md section 4.1): `onData` gets the answer whenever it changes; up to 3 paths per page; paused while the tab is hidden, stopped on every route change (`liveStop`) |
+| `page.live(path, onData)` | follows the GET `path` on the live socket (web-app.md section 4.1): `onData` gets the answer whenever it changes; up to 3 paths per page; paused while the tab is hidden, stopped on every route change (`liveStop`) |
 | `esc(value)` | escapes a text for HTML |
 | `go(name)` | goes to a page |
 | `loadScript(src)` | loads a script once, for pages that the setup does not need (`leds.js`) |

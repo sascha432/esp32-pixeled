@@ -156,7 +156,9 @@ Rules:
   entity, a backup import, uploads, `files.zip`, the URL download over HTTP and HTTPS, DNS queries
   on the hotspot, the UDP sound inputs. A path that was not measured keeps a larger size: MQTT over
   TLS, the timer task (a restart's shutdown handlers), the URL download (other certificate
-  chains). Each size says its peak in a comment.
+  chains), the web server (a fourth `files.zip` at once runs on it; hassctrl measured 4.9 KB for
+  its import), the console (`leds bench`, `light calibrate`), the sound analysis (the UDP sources).
+  Each size says its peak in a comment.
 
 ---
 

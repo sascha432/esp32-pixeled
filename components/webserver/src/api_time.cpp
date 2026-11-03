@@ -8,7 +8,7 @@
 //   GET  /api/time/zones  the IANA names the firmware knows, sorted: ["Africa/Abidjan", ...]
 //
 // Only in the main firmware: main registers the routes (register_time_routes); the recovery app
-// keeps no time. GET /api/time is pushed on the live socket as well. GET /api/time is pushed on the live socket as well.
+// keeps no time. GET /api/time is pushed on the live socket as well.
 
 #include <cstdio>
 #include <cstring>

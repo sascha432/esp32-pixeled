@@ -148,7 +148,8 @@ styles take it. Not tried: the factory reset path (it erases the test board's se
   4336 of 6656, console 2136 of 6144, mqtt 2464 of 6144, network 2372 of 4096, leds 1964 of 4096,
   mdns 2000 of 4096, audio 1332 of 4096, esp_timer 2404 of 4096 (MQTT's state timer), tcpip 1736
   of 3584, captive DNS 1776 of 3072, audio_udp 1340 of 3072, sys_evt 1492 of 2816. Sized from it
-  (the peak and at least 1 KB and a quarter): httpd 6144 (both apps), console 4096, mDNS 3072
+  (the rule of architecture.md section 4; the web server, console and sound analysis above it for
+  the paths not measured): httpd 6144 (both apps), console 4096, mDNS 3072
   (`CONFIG_MDNS_TASK_STACK_SIZE`), audio 3072, audio_udp 2560; 6.5 KB of internal RAM. The same
   load again with them: httpd 3816 of 6144, console 2140 of 4096, mdns 1560 of 3072, audio 1160
   of 3072, audio_udp 1384 of 2560 (the least left, 1176), the others as before; the recovery app

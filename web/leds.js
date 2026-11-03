@@ -9,7 +9,7 @@ window.pxLeds = (() => {
   // ----------------------------------------------------------------------------- the LEDs page
 
   async function leds() {
-    render(`<h1>LEDs</h1><div id="leds-live"></div><div id="leds-control">Loading ...</div><div id="leds-presets"></div><div id="leds-overlay"></div><div id="leds-motion"></div><div id="leds-buttons"></div><div id="leds-audio"></div><div id="leds-config"></div>`);
+    const page = render(`<h1>LEDs</h1><div id="leds-live"></div><div id="leds-control">Loading ...</div><div id="leds-presets"></div><div id="leds-overlay"></div><div id="leds-motion"></div><div id="leds-buttons"></div><div id="leds-audio"></div><div id="leds-config"></div>`);
     let s = await api("/api/leds");
 
     const statusFacts = () => facts([
@@ -228,15 +228,15 @@ window.pxLeds = (() => {
     // The LED status, the sound's slower facts and the preset the light matches follow on the live
     // socket (checked every 2 s, sent when they changed; the bands come with the preview's socket).
     // The controls are not drawn over: they show what this page sent.
-    live("/api/leds", (state) => {
+    page.live("/api/leds", (state) => {
       s = state;
       const box = $("#leds-status");
       if (box) box.innerHTML = statusFacts();
       const motion = $("#motion-status");
       if (motion) motion.innerHTML = motionFacts();
     });
-    if (mic) live("/api/audio", (state) => mic.update(state));
-    live("/api/presets", (state) => presets.update(state));
+    if (mic) page.live("/api/audio", (state) => mic.update(state));
+    page.live("/api/presets", (state) => presets.update(state));
   }
 
   // The card "Sound input": the analysis as it runs (32 bars, the levels), the microphone's settings

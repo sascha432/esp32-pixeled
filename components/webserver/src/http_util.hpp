@@ -11,8 +11,6 @@
 
 #include "auth.hpp"
 
-#include "auth.hpp"
-
 namespace px::webserver {
 struct BackupAccess;
 }
@@ -22,29 +20,6 @@ namespace px::webserver::detail {
 using formats::JsonWriter;
 
 constexpr const char *kSessionCookie = "px_session";
-
-// the token of the session cookie, false without one
-bool session_token(httpd_req_t *req, char (&token)[auth::kTokenSize]);
-
-// ------------------------------------------------------------------------- sessions (idle.cpp)
-
-// The server's open_fn and close_fn: the time of every session's last byte, sent or received; a
-// session silent for 30 s is closed (start_idle_close), the WebSockets and a long response on a
-// task of its own (px/webserver/async.hpp) excepted. Every byte received is activity for the
-// Wi-Fi's modem sleep.
-esp_err_t open_session(httpd_handle_t server, int fd);
-void close_session(httpd_handle_t server, int fd);
-void start_idle_close(httpd_handle_t server);
-
-// ------------------------------------------------------------------- live socket (live.cpp)
-
-// GET /api/live, the WebSocket of the web app (add_live_topic in px/webserver/http.hpp). Topics
-// may be added before or after it.
-void register_live_routes(httpd_handle_t server);
-// the session closed: its subscription goes (close_session)
-void live_forget(int fd);
-// closes the live sockets of the session with this token (a logout)
-void live_close_token(const char *token);
 
 // the token of the session cookie, false without one
 bool session_token(httpd_req_t *req, char (&token)[auth::kTokenSize]);

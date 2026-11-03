@@ -70,7 +70,7 @@ async function busy(button, action) {
 // recovery app has no live socket (`"live": false` in /api/status): when one does not open and the
 // device says so, live() asks with the GETs every 3 s instead (a tick skipped while the last waits
 // or the tab is hidden). A device that restarts says nothing: the socket keeps trying.
-const liveState = { socket: null, follows: new Map(), retry: 1000, timer: null, polling: false, poll: null, seen: 0, queued: false };
+const liveState = { socket: null, follows: new Map(), retry: 1000, timer: null, polling: false, poll: null, seen: 0, queued: false, epoch: 0 };
 
 // The device sends at least `{}` every 10 s; a socket silent for 25 s died without a close (the
 // device restarted, the laptop slept) and is opened again.
@@ -160,9 +160,14 @@ document.addEventListener("visibilitychange", () => {
   else if (!document.hidden) liveConnect();
 });
 
+// Puts the page in and returns its handle: `page.live(path, onData)` follows a GET for this page
+// only. A view that was left while it still loaded its data (its awaits) would otherwise register
+// its paths after the next page's and crowd them out (the device takes the first 3).
 function render(html) {
   $("#page").innerHTML = html;
   window.scrollTo(0, 0);
+  const epoch = ++liveState.epoch;
+  return { live: (path, onData) => { if (epoch === liveState.epoch) live(path, onData); } };
 }
 
 const duration = (s) =>
@@ -351,7 +356,7 @@ function setupLogin() {
 
 async function setupDone() {
   frame(false, "3 / 3");
-  render(`<h1>Done</h1><div class="card"><div class="card-body" id="done">Checking the Wi-Fi ...</div></div>`);
+  const page = render(`<h1>Done</h1><div class="card"><div class="card-body" id="done">Checking the Wi-Fi ...</div></div>`);
   const draw = (s) => {
     const w = s.wifi;
     const box = $("#done");
@@ -375,7 +380,7 @@ async function setupDone() {
     });
   };
   draw(await api("/api/status"));
-  live("/api/status", draw);
+  page.live("/api/status", draw);
 }
 
 // -------------------------------------------------------------------------------------- login
@@ -440,7 +445,7 @@ const views = {
     await window.pxLeds.layout();
   },
   async status() {
-    render(`<h1>Status</h1><div id="status-cards">Loading ...</div>`);
+    const page = render(`<h1>Status</h1><div id="status-cards">Loading ...</div>`);
     const draw = (s) => {
       showHeader(s);
       const w = s.wifi, h = s.hotspot, d = s.device;
@@ -463,11 +468,11 @@ const views = {
         ]));
     };
     draw(await api("/api/status"));
-    live("/api/status", draw);
+    page.live("/api/status", draw);
   },
 
   async wifi() {
-    render(`<h1>Wi-Fi</h1><div id="wifi-saved">Loading ...</div>
+    const page = render(`<h1>Wi-Fi</h1><div id="wifi-saved">Loading ...</div>
       <div class="card"><div class="card-body"><h2 class="h6 card-title d-flex">Add a network
         <button id="rescan" class="btn btn-sm btn-outline-secondary ms-auto" type="button">Scan</button></h2>
         <div id="wifi-add"></div></div></div>`);
@@ -562,7 +567,7 @@ const views = {
     let shown = JSON.stringify(w);
     // what was not drawn while picking, once the picker is left without a password typed
     let pickerBehind = false;
-    live("/api/wifi", (data) => {
+    page.live("/api/wifi", (data) => {
       const before = JSON.parse(shown);
       shown = JSON.stringify(data);
       w = data;
@@ -581,7 +586,7 @@ const views = {
   },
 
   async hotspot() {
-    render(`<h1>Hotspot</h1><div id="hotspot">Loading ...</div>`);
+    const page = render(`<h1>Hotspot</h1><div id="hotspot">Loading ...</div>`);
     const draw = (h) => {
       const box = $("#hotspot");
       if (!box || box.contains(document.activeElement)) return;
@@ -610,7 +615,7 @@ const views = {
     // a push that came while a control had the focus is drawn when the focus leaves
     let latest = await api("/api/hotspot");
     draw(latest);
-    live("/api/hotspot", (h) => draw((latest = h)));
+    page.live("/api/hotspot", (h) => draw((latest = h)));
     $("#hotspot").addEventListener("focusout", (event) => {
       if (!$("#hotspot").contains(event.relatedTarget)) setTimeout(() => draw(latest));
     });
@@ -618,7 +623,7 @@ const views = {
 
   // MQTT and Home Assistant discovery (docs/ui/web/web-app.md section 4)
   async mqtt() {
-    render(`<h1>MQTT</h1><div id="mqtt-status">Loading ...</div><div id="mqtt-form"></div>`);
+    const page = render(`<h1>MQTT</h1><div id="mqtt-status">Loading ...</div><div id="mqtt-form"></div>`);
     let m;
     try {
       m = await api("/api/mqtt");
@@ -685,12 +690,12 @@ const views = {
       m = await api("/api/mqtt", { forget_password: "1" });
       go("mqtt");
     });
-    live("/api/mqtt", (state) => { m = state; drawStatus(); });
+    page.live("/api/mqtt", (state) => { m = state; drawStatus(); });
   },
 
   // the clock: time zone and SNTP servers (docs/ui/web/web-app.md section 4)
   async time() {
-    render(`<h1>Time</h1><div id="time-status">Loading ...</div><div id="time-form"></div>`);
+    const page = render(`<h1>Time</h1><div id="time-status">Loading ...</div><div id="time-form"></div>`);
     let t, zones;
     try {
       [t, zones] = await Promise.all([api("/api/time"), api("/api/time/zones")]);
@@ -761,7 +766,7 @@ const views = {
         toast("saved", "success");
       });
     };
-    live("/api/time", (state) => { t = state; drawStatus(); });
+    page.live("/api/time", (state) => { t = state; drawStatus(); });
   },
   async logs() {
     render(`<h1>Logs</h1><div class="card"><div class="card-body">

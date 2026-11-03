@@ -9,6 +9,15 @@ and what is gone under Removed. Updated in the same commit as the change ([CLAUD
 
 ### 2026-11-03
 
+Fixed
+
+* Web UI: a page left while it still loaded no longer takes the live socket from the next page
+  (that page was drawn once and got no pushes); `render()` returns the page's `live()`.
+* The live socket of a logout or an ended login is closed also when the server's queue was full
+  at that moment (it stayed open until TCP keep-alive ended it).
+* The web server no longer hangs when no task can be made for a long response (`files.zip`): the
+  free memory for its stack is checked before the request is handed over.
+
 Added
 
 * Console: `mem tasks` lists every task's stack, its peak use and where it lives (needs
