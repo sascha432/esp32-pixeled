@@ -54,7 +54,10 @@ schedules, Ethernet, IR remotes, the ESP32-P4, clocked LEDs (APA102), RGBW
   variant (section 8, "Variants") when the build is for one (`<board>.<variant>`, build directory
   `build/<board>.<variant>/<app>`). ESP-IDF also reads `<layer>.<target>` next to each layer.
 * One ESP-IDF project builds both applications: `PX_APP=main` or `PX_APP=recovery` excludes the
-  other application's top-level component (section 9.5).
+  other application's top-level component (section 9.5). The version is `PROJECT_VER` in the root
+  `CMakeLists.txt`; the build time is the app descriptor's `__DATE__`/`__TIME__`, which the root
+  `CMakeLists.txt` recompiles with every build (the IDF alone only does it after a dependency
+  changed). `platform::build_time()` formats it for the boot log, `/api/status` and the System page.
 * FreeRTOS tick 1 ms (`CONFIG_FREERTOS_HZ=1000`, `sdkconfig.main`): the render task paces frames
   to the millisecond. Durations are converted with `pdMS_TO_TICKS`, never with a fixed tick.
 * `-Werror=double-promotion` on our own components: the ESP32 and S3 have a single precision FPU,
@@ -101,7 +104,7 @@ Built: `leds` (the render task), `output` (RMT, the parallel outputs of the ESP3
 | `config` | `formats`, `memory` | yes | The backup file: sections with write, check and apply (section 9.3) |
 | `platform` | `littlefs`, `nvs_flash` | no | Boot log, both NVS partitions, LittleFS at `/fs`, the settings class, the device name, SNTP and the time zones |
 | `network` | `esp_wifi`, `esp_netif`, `mdns` | no | Station and access point state machine, scans, stored networks (section 9) |
-| `webserver` | `esp_http_server`, `network`, `ota` | no | Captive portal, login, setup, status, Wi-Fi, update, files, log and backup API; the web UI from LittleFS (section 9.4) |
+| `webserver` | `esp_http_server`, `network`, `ota` | no | Captive portal, login, setup, status, Wi-Fi, update, files, log and backup API, the live socket of the pages; the web UI from LittleFS (section 9.4) |
 | `ota` | `app_update`, `board` | no | Firmware and file system updates, rollback, the recovery app switch (section 9.5) |
 | `board` | `esp_driver_i2c` | no | The constants of the board (pins of a new device), the image tag, the shared I2C bus (section 8) |
 | `output` | `esp_driver_rmt`, `esp_driver_dma` | no | The LED lanes: the RMT backend, the parallel backends (ESP32 I2S, S3 LCD_CAM) ([leds.md](leds.md) section 2.2) |
@@ -133,7 +136,7 @@ Rules:
 | Task | Created by | Owns |
 | --- | --- | --- |
 | **network task** | `network` | the Wi-Fi driver, the saved networks, the hotspot |
-| **web server task** | `esp_http_server` | one request at a time; static buffers of its handlers |
+| **web server task** | `esp_http_server` | one request at a time; static buffers of its handlers; the live socket's clients and its tick (section 9.4). A long response (`files.zip`) runs on a task of its own (`px/webserver/async.hpp`, at most 3) |
 | **render task** | `leds` | the LED state: animation, parameters, brightness, the layout, the frame buffers, the output, the supply ([leds.md](leds.md) section 3); core 1 on the dual-core chips, priority 5 |
 | **mqtt task** | `espressif/mqtt` | the connection; its event handler announces the device and posts commands to the render task; the web server's task replaces the client when the settings change (the handle under a lock) |
 | console task | `devconsole` | the serial command line |
@@ -146,6 +149,14 @@ Rules:
   (`webserver::BackupAccess`), so the lower components do not depend on each other.
 * esp_timer for periodic sampling (motion, delayed settings writes); a dedicated task only for
   blocking I/O (light sensor, network) or real-time work (rendering).
+* **Task stacks** are sized from a measurement: the most a task used under load (`mem tasks`,
+  section 11; a task that ends logs it once for the measurement) plus 25 % or 1 KB, whichever is
+  more, rounded up to 256 bytes. The load (ESP32 test board, 2026-11-03, docs/TODO.md "Task
+  stacks"): the web test, the live socket and the preview, every animation, MQTT with every
+  entity, a backup import, uploads, `files.zip`, the URL download over HTTP and HTTPS, DNS queries
+  on the hotspot, the UDP sound inputs. A path that was not measured keeps a larger size: MQTT over
+  TLS, the timer task (a restart's shutdown handlers), the URL download (other certificate
+  chains). Each size says its peak in a comment.
 
 ---
 
@@ -274,13 +285,23 @@ fits every wiring of a board (not built: `main` uses the board's pins as they ar
   reset for a few seconds and does not answer its new login in time (reason 2). The first retry
   comes after 1 s and goes to the same network. A network saved without a password against a
   secured one ends in reason 210, shown as "the network needs a password, add it again".
-* Wi-Fi power save (modem sleep, `WIFI_PS_MIN_MODEM`) only while the LEDs are off: main switches
-  it with the LED supply (`network::set_power_save`). The radio then sleeps between the router's
+* Wi-Fi power save (modem sleep, `WIFI_PS_MIN_MODEM`): the radio sleeps between the router's
   beacons; on the ESP32 test board the idle current at 5 V drops from 70 to 80 mA to 15 to 25 mA,
-  ping goes from 13 ms to 80 ms on average (up to 150 ms), and
-  every packet, a command to switch the LEDs on included, waits up to a beacon interval. While the
-  LEDs are on it is off: realtime input ([leds.md](leds.md) section 7) and live controls need every
-  packet at once. With the hotspot on, the driver keeps the radio awake anyway.
+  ping goes from 13 ms to 80 ms on average (up to 150 ms), and every packet, a command to switch
+  the LEDs on included, waits up to a beacon interval. The network task turns it on when nothing
+  holds the Wi-Fi awake and `network::kModemSleepDelayS` (5 min) have passed since the last
+  activity, and off at once when either changes (built 2026-11-02, the rule of hassctrl; before,
+  with the LED supply only). Holds (`network::hold_awake`, an atomic bit set, also before the
+  network starts): the LED supply is on (`main`'s supply callback: realtime input
+  ([leds.md](leds.md) section 7) and live controls need every packet at once), a browser tab
+  follows a page on the live socket (`live.cpp`; a hidden tab does not). Activity
+  (`network::wake_activity`, an atomic time stamp, a message only while the modem sleeps): every
+  byte a browser sends to the web server (`idle.cpp`'s receive), and the end of a hold. So the LEDs
+  going off start the 5 min, and a request in the night wakes the Wi-Fi for the next 5 min; the
+  first 5 min count from the start. MQTT's own traffic is no activity: with the LEDs off its
+  commands wait up to a beacon interval. With the hotspot on, the driver keeps the radio awake
+  anyway. Console `wifi status` (line `modem:`) and `/api/status` (`wifi.modem_sleep`)
+  show the state.
 
 ### 9.3 Storage
 
@@ -325,11 +346,11 @@ fits every wiring of a board (not built: `main` uses the board's pins as they ar
 
 | Component | Responsibility |
 | --- | --- |
-| `platform` | boot log, both NVS partitions, LittleFS at `/fs`, the settings class, the device name (`pixeled-` and the last two MAC bytes), SNTP with its two servers and the time zone, an IANA name or a POSIX TZ rule (`time_sync.cpp`, the IANA zone table in `timezone.cpp`, built by `tools/build_timezones.py`) |
-| `network` | the station and hotspot state machine of sections 9.1 and 9.2, up to 5 stored networks, the hotspot password, scan results, stored in the settings NVS. One task owns the driver and the state; commands are queued, readers get copies (`status()`). Files: `network.cpp` (the state, the task, start), `station.cpp` (scan, connect, retry, roam), `commands.cpp` (the saved networks), `api.cpp` (the calls of other tasks). mDNS: the device answers as `<device name>.local` and announces `_http._tcp`, in both apps |
-| `webserver` | captive portal DNS and redirect, the status API and the built-in page, the setup pages, login, Wi-Fi, hotspot, update, files, log and backup API, the time API (`register_time_routes`, registered by `main` only). Serves the web files from LittleFS, with a recovery page compiled in that works without the file system ([ui/web/web-recovery.md](ui/web/web-recovery.md)). `Config::add_routes` lets `main` register more routes (the LED, audio, MQTT and time API). Routes are made with `detail::route()` (the main firmware has WebSocket support, `CONFIG_HTTPD_WS_SUPPORT`, which adds fields to `httpd_uri_t`) |
+| `platform` | boot log, both NVS partitions, LittleFS at `/fs`, the settings class, the device name (`pixeled-` and the last two MAC bytes), SNTP with its two servers and the time zone, an IANA name or a POSIX TZ rule (`time_sync.cpp`, the IANA zone table in `timezone.cpp`, built by `tools/build_timezones.py`); `build_time()`; `restart()` for every restart of the firmware: `esp_restart()` with the RTC watchdog armed for 5 s, so a shutdown handler that waits cannot keep the board up (the next start then reports a watchdog reset) |
+| `network` | the station and hotspot state machine of sections 9.1 and 9.2, up to 5 stored networks, the hotspot password, scan results, stored in the settings NVS. One task owns the driver and the state; commands are queued, readers get copies (`status()`). Files: `network.cpp` (the state, the task, start, modem sleep), `station.cpp` (scan, connect, retry, roam), `commands.cpp` (the saved networks), `api.cpp` (the calls of other tasks, the holds and the activity of section 9.2). mDNS: the device answers as `<device name>.local` and announces `_http._tcp`, in both apps |
+| `webserver` | captive portal DNS and redirect, the status API and the built-in page, the setup pages, login, Wi-Fi, hotspot, update, files, log and backup API, the time API (`register_time_routes`, registered by `main` only). Serves the web files from LittleFS, with a recovery page compiled in that works without the file system ([ui/web/web-recovery.md](ui/web/web-recovery.md)). `Config::add_routes` lets `main` register more routes (the LED, audio, MQTT and time API). Routes are made with `detail::route()` (the main firmware has WebSocket support, `CONFIG_HTTPD_WS_SUPPORT`, which adds fields to `httpd_uri_t`). The pages follow their state on one WebSocket per tab, `/api/live` (`live.cpp`, [ui/web/web-app.md](ui/web/web-app.md) section 4.1): a route file splits its GET into a `StateWriter` and registers it with `add_live_topic` (`px/webserver/http.hpp`, also the LED, preset, audio and MQTT APIs); the answer is pushed when it changes, up to 3 paths per tab, the login checked before the handshake and on every check, `{}` after 10 s without a frame; not in the recovery app (`"live": false` in `/api/status`). Sessions (`idle.cpp`, the server's `open_fn` and `close_fn`): every send and receive notes the time, a session silent for 30 s is closed (not a WebSocket, not a long response; TCP keep-alive finds a dead socket); every byte received is activity for modem sleep. Long responses (`files.zip`) run on a task of their own (`px/webserver/async.hpp`). 12 sessions, the oldest closed when a 13th comes (LRU); that needs a free lwIP socket, so sessions, the server's 3 sockets, the captive DNS (open only while the hotspot is on) and the device's own clients stay within `CONFIG_LWIP_MAX_SOCKETS` (24, a `static_assert` in `webserver.cpp`) |
 | `ota` | firmware and file system images from an upload, a tool or a URL download, app rollback ([ui/web/web-app.md](ui/web/web-app.md) section 5), restart into the recovery app and back, partition layout of section 9.5 |
-| `devconsole` | serial command line for development (`CONFIG_PX_DEV_CONSOLE`): Wi-Fi networks, hotspot (`hotspot open` as the button at boot), file system, memory, log level, light sensor, relay, motion sensor, audio, LEDs (palette, presets), buttons (`input`), MQTT (`mqtt`, its settings without the password), restart, factory reset, a crash on purpose (`crash yes`) (`help` lists them) |
+| `devconsole` | serial command line for development (`CONFIG_PX_DEV_CONSOLE`): Wi-Fi networks, hotspot (`hotspot open` as the button at boot), file system, memory, log level, light sensor, relay, motion sensor, audio, LEDs (palette, presets), buttons (`input`), MQTT (`mqtt`, its settings without the password), lwIP's sockets (`sockets`), the stack of every task (`mem tasks`), restart, factory reset, a crash on purpose (`crash yes`) (`help` lists them); `wifi status` shows modem sleep (`modem:`) |
 | `logbuf` | the log in a ring buffer for the web UI's log page |
 | `relay` | relays on GPIOs: the LED power supply (section 9.6) |
 | `motion` | a motion sensor on a GPIO (section 9.6) |
@@ -462,7 +483,21 @@ esp32-pixeled/
   accepted: `devconsole.cpp` (a development tool).
 * Memory: large buffers in PSRAM where there is one (`memory::allocate_large`,
   `heap_caps_malloc_prefer`); DMA buffers and code that runs with the cache off in internal RAM,
-  asked for with `heap_caps_malloc`. No allocation per frame in the render path. The console
-  command `mem` shows what is free.
+  asked for with `heap_caps_malloc`. No allocation per frame in the render path. On the S3 a
+  static object that only tasks touch, never an interrupt, the render path or code that runs with
+  the cache off, is `EXT_RAM_BSS_ATTR`, in PSRAM (`CONFIG_SPIRAM_ALLOW_BSS_SEG_EXTERNAL_MEMORY`
+  in `sdkconfig.main.esp32s3`): the network task's state and its copies, the import tables, the
+  pending settings writes, the answer buffers of the web handlers, MQTT's announcement buffers,
+  the live socket's clients (21 KB). In code the PC builds compile too it is `PX_PSRAM_BSS`
+  (`px/memory/psram_bss.hpp`). Elsewhere the attribute is nothing: the other chips have no
+  PSRAM, and the recovery app leaves the option off, because with it ESP-IDF aborts the boot when
+  the PSRAM fails (hassctrl, tested 2026-11-03), and the recovery app has to start then. That
+  section is zeroed at start, never loaded from the image: an object there starts as zeros. The
+  network task's `t` has non-zero defaults, so `network::start()` constructs it in place first; the
+  live socket's clients are assigned in full before a slot is read. mDNS keeps its data and its
+  task stack in PSRAM on the S3 (`sdkconfig.main.esp32s3`). The render task's state and the sound
+  analysis stay internal (every frame). The console command `mem` shows what is free. `mem tasks` lists every task's stack, its peak use and where it
+  lives; it needs `CONFIG_FREERTOS_USE_TRACE_FACILITY=y` (off in the builds: set it in a variant's
+  `sdkconfig.defaults` or with menuconfig for a measurement).
 * Comments explain why, not what, often with a measurement and its date. Behavior is specified
   in `docs/`; headers point there.

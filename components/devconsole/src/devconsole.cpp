@@ -20,6 +20,7 @@
 #endif
 #include "esp_console.h"
 #include "esp_heap_caps.h"
+#include "esp_memory_utils.h"
 #include "esp_log.h"
 #include "esp_system.h"
 #include "esp_timer.h"
@@ -31,6 +32,7 @@
 #include "px/logbuf/logbuf.hpp"
 #include "px/light_sensor/light_sensor.hpp"
 #include "px/network/network.hpp"
+#include "px/platform/restart.hpp"
 #include "px/platform/settings.hpp"
 #include "px/platform/storage.hpp"
 #include "px/motion/motion.hpp"
@@ -41,8 +43,10 @@
 #include "px/relay/relay.hpp"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
+#include "freertos/freertos_debug.h"
 #include "px/webserver/webserver.hpp"
 #include "linenoise/linenoise.h"
+#include "lwip/sockets.h"
 
 #if CONFIG_LIBC_PICOLIBC
 // linenoise reads and writes the stdio streams of its task through these (esp_console's own REPL
@@ -94,6 +98,15 @@ void print_status()
         std::printf("error:   %s\n", s.error);
     }
     std::printf("policy:  %s\n", s.policy == net::Policy::EnteredOrder ? "entered order" : "strongest signal");
+    if (s.modem_sleep) {
+        std::printf("modem:   sleeps\n");
+    } else if (s.awake_holds != 0) {
+        const auto held = [&s](net::AwakeHold hold) { return (s.awake_holds & static_cast<uint8_t>(hold)) != 0; };
+        std::printf("modem:   awake, held by%s%s\n", held(net::AwakeHold::Leds) ? " leds" : "",
+                    held(net::AwakeHold::Web) ? " web" : "");
+    } else {
+        std::printf("modem:   awake, sleeps in %lu s\n", static_cast<unsigned long>(s.modem_sleep_in_s));
+    }
     std::printf("hotspot: %s, '%s', %s %s, %u clients", s.hotspot_on ? "on" : "off", s.hotspot_ssid,
                 s.hotspot_open ? "open for the setup, then password" : "password", s.hotspot_password,
                 s.hotspot_clients);
@@ -250,16 +263,162 @@ int cmd_login_reset(int argc, char **argv)
 
 int cmd_restart(int, char **)
 {
-    esp_restart();
+    px::platform::restart();
     return 0;
 }
+
+// "a.b.c.d:port" of an IPv4 address or one mapped into IPv6 (the web server listens on IPv6)
+void format_address(const sockaddr_storage &address, char *text, size_t size)
+{
+    in_addr ip{};
+    uint16_t port = 0;
+#if CONFIG_LWIP_IPV6
+    if (address.ss_family == AF_INET6) {
+        const auto &v6 = reinterpret_cast<const sockaddr_in6 &>(address);
+        ip.s_addr = v6.sin6_addr.un.u32_addr[3];
+        port = v6.sin6_port;
+    } else
+#endif
+    {
+        const auto &v4 = reinterpret_cast<const sockaddr_in &>(address);
+        ip = v4.sin_addr;
+        port = v4.sin_port;
+    }
+    char ip_text[16];
+    inet_ntoa_r(ip, ip_text, sizeof(ip_text));
+    std::snprintf(text, size, "%s:%u", ip_text, ntohs(port));
+}
+
+// Every socket of lwIP (CONFIG_LWIP_MAX_SOCKETS): its kind, own and other end, "keepalive" when
+// TCP keep-alive is on. Shows who holds them when the web server cannot accept (ENFILE).
+int cmd_sockets(int, char **)
+{
+    int used = 0;
+    for (int fd = LWIP_SOCKET_OFFSET; fd < LWIP_SOCKET_OFFSET + CONFIG_LWIP_MAX_SOCKETS; ++fd) {
+        int type = 0;
+        socklen_t length = sizeof(type);
+        if (getsockopt(fd, SOL_SOCKET, SO_TYPE, &type, &length) != 0) {
+            continue;
+        }
+        ++used;
+        int listening = 0;
+        length = sizeof(listening);
+        getsockopt(fd, SOL_SOCKET, SO_ACCEPTCONN, &listening, &length);
+        int keepalive = 0;
+        length = sizeof(keepalive);
+        getsockopt(fd, SOL_SOCKET, SO_KEEPALIVE, &keepalive, &length);
+        sockaddr_storage own{};
+        sockaddr_storage peer{};
+        socklen_t own_length = sizeof(own);
+        socklen_t peer_length = sizeof(peer);
+        getsockname(fd, reinterpret_cast<sockaddr *>(&own), &own_length);
+        const bool connected = getpeername(fd, reinterpret_cast<sockaddr *>(&peer), &peer_length) == 0;
+        char own_text[24];
+        char peer_text[24];
+        format_address(own, own_text, sizeof(own_text));
+        format_address(peer, peer_text, sizeof(peer_text));
+        std::printf("%2d %s %-21s %-21s%s\n", fd, type == SOCK_STREAM ? "tcp" : type == SOCK_DGRAM ? "udp" : "raw", own_text,
+                    listening != 0 ? "listening" : connected ? peer_text : "", keepalive != 0 ? " keepalive" : "");
+    }
+    std::printf("%d of %d sockets in use\n", used, CONFIG_LWIP_MAX_SOCKETS);
+    return 0;
+}
+
+#if CONFIG_FREERTOS_USE_TRACE_FACILITY
+// `mem tasks`: every task's stack, the least it had free since the task started, and where it
+// lives. A task that ended is gone from the list: run what it does first, then look.
+// uxTaskGetSystemState needs CONFIG_FREERTOS_USE_TRACE_FACILITY (docs/architecture.md section 11).
+int print_tasks()
+{
+    const UBaseType_t capacity = uxTaskGetNumberOfTasks() + 8;
+    auto *tasks = static_cast<TaskStatus_t *>(heap_caps_malloc_prefer(
+        capacity * sizeof(TaskStatus_t), 2, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT, MALLOC_CAP_8BIT));
+    if (tasks == nullptr) {
+        std::printf("no memory for the list\n");
+        return 1;
+    }
+    const UBaseType_t count = uxTaskGetSystemState(tasks, capacity, nullptr);
+    struct Row {
+        char name[configMAX_TASK_NAME_LEN];
+        uint32_t size;
+        uint32_t least_free;
+        bool psram;
+        BaseType_t core;
+        UBaseType_t priority;
+    };
+    auto *rows = static_cast<Row *>(heap_caps_malloc_prefer(count * sizeof(Row), 2, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT,
+                                                            MALLOC_CAP_8BIT));
+    if (rows == nullptr) {
+        heap_caps_free(tasks);
+        std::printf("no memory for the list\n");
+        return 1;
+    }
+    for (UBaseType_t i = 0; i < count; i++) {
+        const TaskStatus_t &task = tasks[i];
+        // the stack grows down from pxEndOfStack (its last word, aligned down to 16 bytes) to
+        // pxStackBase: rounded up, that is the size the task was created with. 0 if the task ended
+        // since the list was made; name and numbers are copied at once for the same reason.
+        TaskSnapshot_t snapshot{};
+        uint32_t size = 0;
+        if (vTaskGetSnapshot(task.xHandle, &snapshot) == pdTRUE && snapshot.pxEndOfStack >= task.pxStackBase) {
+            size = static_cast<uint32_t>(reinterpret_cast<uint8_t *>(snapshot.pxEndOfStack) -
+                                         reinterpret_cast<uint8_t *>(task.pxStackBase)) +
+                   sizeof(StackType_t);
+            size = (size + 15) & ~15u;
+        }
+        Row &row = rows[i];
+        std::snprintf(row.name, sizeof(row.name), "%s", task.pcTaskName);
+        row.size = size;
+        row.least_free = static_cast<uint32_t>(task.usStackHighWaterMark) * sizeof(StackType_t);
+        row.psram = esp_ptr_external_ram(task.pxStackBase);
+        row.core = xTaskGetCoreID(task.xHandle);
+        row.priority = task.uxBasePriority;
+    }
+    std::sort(rows, rows + count, [](const Row &a, const Row &b) { return a.size > b.size; });
+    std::printf("%-16s %6s %6s %6s %-8s %4s %4s\n", "task", "stack", "used", "free", "where", "core", "prio");
+    uint32_t internal_size = 0;
+    uint32_t internal_free = 0;
+    for (UBaseType_t i = 0; i < count; i++) {
+        const Row &row = rows[i];
+        char core[12] = "any";
+        if (row.core != tskNO_AFFINITY) {
+            std::snprintf(core, sizeof(core), "%d", static_cast<int>(row.core));
+        }
+        const uint32_t used = row.size > row.least_free ? row.size - row.least_free : 0;
+        std::printf("%-16s %6u %6u %6u %-8s %4s %4u\n", row.name, static_cast<unsigned>(row.size),
+                    static_cast<unsigned>(used), static_cast<unsigned>(row.least_free),
+                    row.psram ? "PSRAM" : "internal", core, static_cast<unsigned>(row.priority));
+        if (!row.psram) {
+            internal_size += row.size;
+            internal_free += row.least_free;
+        }
+    }
+    std::printf("%u tasks; internal stacks %u bytes, of them never used %u\n", static_cast<unsigned>(count),
+                static_cast<unsigned>(internal_size), static_cast<unsigned>(internal_free));
+    heap_caps_free(rows);
+    heap_caps_free(tasks);
+    return 0;
+}
+#endif
 
 // Heap per kind of memory: free now and the largest block one allocation can get (KB). Internal
 // includes IRAM on the ESP32, which data cannot use; 8-bit is the part that can hold data. No
 // "lowest since the start": ESP-IDF sums the low point of every region, so one region that was
 // full once reads as 0 although the others had room.
-int cmd_mem(int, char **)
+int cmd_mem(int argc, char **argv)
 {
+    if (argc > 1) {
+        if (std::strcmp(argv[1], "tasks") != 0) {
+            std::printf("usage: mem [tasks]\n");
+            return 1;
+        }
+#if CONFIG_FREERTOS_USE_TRACE_FACILITY
+        return print_tasks();
+#else
+        std::printf("needs CONFIG_FREERTOS_USE_TRACE_FACILITY=y (docs/architecture.md section 11)\n");
+        return 1;
+#endif
+    }
     struct Row {
         const char *name;
         uint32_t caps;
@@ -1295,7 +1454,7 @@ int cmd_factory_reset(int argc, char **argv)
     if (check(px::platform::erase_all_settings()) != 0) {
         return 1;
     }
-    esp_restart();
+    px::platform::restart();
     return 0;
 }
 
@@ -1312,7 +1471,8 @@ esp_err_t add(const char *name, const char *help, const char *hint, esp_console_
 TaskHandle_t g_task = nullptr;
 
 constexpr const char *kPrompt = "pixeled> ";
-constexpr uint32_t kStackSize = 6144;
+// 2136 bytes used at most (docs/TODO.md, "Task stacks", 2026-11-03)
+constexpr uint32_t kStackSize = 4096;
 
 // The console's port with its driver, as esp_console's REPL sets it up: Enter sends CR, a line
 // ends in CRLF. A UART, or the USB-Serial/JTAG of boards without a USB-UART bridge.
@@ -1373,7 +1533,8 @@ void register_commands()
     add("hotspot", "turn the hotspot on or off, give it a new password, or open it as the button at boot does",
         "on|off|password|open", cmd_hotspot);
     add("fs", "file system status", nullptr, cmd_fs);
-    add("mem", "free memory: internal, DMA, PSRAM", nullptr, cmd_mem);
+    add("mem", "free memory: internal, DMA, PSRAM; tasks: the stack of every task", "[tasks]", cmd_mem);
+    add("sockets", "the sockets of lwIP: kind, own and other end", nullptr, cmd_sockets);
     add("restart", "restart the device", nullptr, cmd_restart);
     add("reboot", "restart the device", nullptr, cmd_restart);
     add("login-reset", "remove the web UI login", "yes", cmd_login_reset);

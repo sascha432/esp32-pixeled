@@ -5,6 +5,7 @@
 #include <algorithm>
 #include <cstring>
 
+#include "esp_attr.h"
 #include "esp_log.h"
 #include "esp_system.h"
 #include "esp_timer.h"
@@ -26,8 +27,10 @@ struct Pending {
     size_t size;
 };
 
-// g_lock is held while the values are written, so a discard waits for a write in progress
-Pending g_pending[kMaxPendingWrites];
+// g_lock is held while the values are written, so a discard waits for a write in progress. In
+// PSRAM on the S3 (docs/architecture.md section 11): the tasks that set values and the timer
+// task; NVS copies a value from PSRAM through a buffer of its own.
+EXT_RAM_BSS_ATTR Pending g_pending[kMaxPendingWrites];
 size_t g_count = 0;
 int64_t g_first_us = 0; // when the oldest pending value came
 SemaphoreHandle_t g_lock = nullptr;

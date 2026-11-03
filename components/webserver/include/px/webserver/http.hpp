@@ -9,6 +9,7 @@
 
 #include "esp_http_server.h"
 #include "px/formats/json_writer.hpp"
+#include "px/memory/large.hpp"
 
 namespace px::webserver::detail {
 
@@ -18,8 +19,8 @@ using formats::JsonWriter;
 bool read_body(httpd_req_t *req, char *out, size_t size);
 
 // The whole request body in a buffer of the large heap (memory::release_large), terminated; null
-// when it is empty, larger than `limit` or the client stalls (the server has one task, one
-// receive timeout ends the request).
+// when it is empty, larger than `limit` or the client stalls (one receive timeout, 5 s: a form
+// arrives at once).
 char *read_large_body(httpd_req_t *req, size_t limit, size_t &length);
 
 // the value of `key` in the query string, false when it is not there
@@ -36,6 +37,20 @@ bool form_has(const char *body, const char *key);
 esp_err_t send_json(httpd_req_t *req, const JsonWriter &json);
 // {"error": message} with an HTTP status such as "401 Unauthorized"
 esp_err_t send_error(httpd_req_t *req, const char *status, const char *message);
+
+// The answer of a GET that the live socket pushes as well (live.cpp, docs/ui/web/web-app.md
+// section 4.1): writes the whole state, called once to measure and once to write (twice more if
+// the state grew in between). It runs on the server's task, also without a request (the live
+// socket's tick), so it reads only copies of other tasks' state.
+using StateWriter = void (*)(JsonWriter &json);
+// the state's JSON in `buffer` (the large heap), its length; 0 when it kept growing
+size_t build_state(StateWriter write, memory::Vector<char> &buffer);
+// GET answered with the state (no-store), 500 when it could not be built
+esp_err_t send_state(httpd_req_t *req, StateWriter write);
+// The live socket follows the GET `path` (at most 31 characters): every `period_ms` its state is
+// built and sent to the tabs that follow it when it changed. Called by the route files with their
+// routes; nothing in the recovery app (no WebSocket support).
+void add_live_topic(const char *path, uint32_t period_ms, StateWriter write);
 
 // A route for httpd_register_uri_handler. The struct has more fields with WebSocket support
 // (CONFIG_HTTPD_WS_SUPPORT, the main firmware): all zero here.

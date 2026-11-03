@@ -5,6 +5,9 @@
     python tools/build_fs.py <board> -p COM9         and write it to the board over serial, keeping
                                                      the board's own files (presets)
     python tools/build_fs.py <board> -p COM9 --fresh the same without keeping anything
+    python tools/build_fs.py <board> --device 192.168.0.206
+                                                     and upload it over the network, keeping
+                                                     the device's own files the same way
 
 <board> is the name given to tools/build.py, a variant included (esp32s3_devkit.kitchen). The web
 files are built by tools/build_web.py first (build/<board>/fs/web: the pages of options the
@@ -15,8 +18,11 @@ build/<board>/main/sdkconfig, so the firmware is built first. Upload it on the S
 web UI, or with tools/update.py <device> filesystem <image>.
 
 The image replaces the whole partition. With -p the partition of the board is read first and
-every file outside /www (the presets) goes into the new image, so a web UI update keeps them. An
-upload through the web UI or update.py does not: export a backup first. The web UI belongs to the
+every file outside /www (the presets) goes into the new image, so a web UI update keeps them. With
+--device the same files come from the device's /api/fs/files.zip (login as tools/update.py:
+--user, --password or PX_PASSWORD), and the image goes up as with update.py; a file the device
+could not read stops it, nothing is uploaded. An upload through the web UI or
+`update.py ... filesystem --fresh` keeps nothing: export a backup first. The web UI belongs to the
 firmware: a firmware with a change to the API goes onto a device together with its web image.
 
 littlefs-python (the version the littlefs component uses for its images), rjsmin and rcssmin are
@@ -35,6 +41,7 @@ import shutil
 import subprocess
 import sys
 import venv
+import zipfile
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -45,6 +52,9 @@ PACKAGES = ("littlefs-python==0.15.0", "rjsmin==1.3.0", "rcssmin==1.3.0")
 # CONFIG_LITTLEFS_OBJ_NAME_LEN and the flash sector size
 NAME_MAX = 64
 BLOCK_SIZE = 4096
+# reading the board's partition: a file system the firmware formatted has LittleFS's own limit in its
+# superblock, and a mount with a smaller one fails (LFS_ERR_INVAL)
+READ_NAME_MAX = 255
 
 
 def fail(message: str) -> None:
@@ -145,7 +155,7 @@ def keep_device_files(port: str, out_dir: Path, root: Path) -> list[str]:
     if device_root.exists():
         shutil.rmtree(device_root)
     result = subprocess.run([str(littlefs_tool()), "extract", str(device_image), str(device_root),
-                             f"--name-max={NAME_MAX}", f"--block-size={BLOCK_SIZE}"],
+                             f"--name-max={READ_NAME_MAX}", f"--block-size={BLOCK_SIZE}"],
                             stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, text=True)
     if result.returncode != 0:
         print("build_fs.py: the board's file system could not be read (not formatted?), nothing kept")
@@ -162,12 +172,44 @@ def keep_device_files(port: str, out_dir: Path, root: Path) -> list[str]:
     return kept
 
 
+def keep_files_over_network(device, root: Path) -> list[str]:
+    """Copies every file of the device's /api/fs/files.zip outside www/ into root."""
+    with device.opener.open(device.base + "/api/fs/files.zip", timeout=120) as response:
+        archive = zipfile.ZipFile(io.BytesIO(response.read()))
+    names = [n for n in archive.namelist() if not n.endswith("/")]
+    # the archive names what it could not read (or that the file system did not mount) in this note
+    if "unreadable.txt" in names:
+        fail("the device could not read all of its files, nothing uploaded:\n"
+             + archive.read("unreadable.txt").decode(errors="replace"))
+    kept = []
+    for name in sorted(names):
+        if name.split("/")[0] in FIRMWARE_DIRS:
+            continue
+        target = root / name
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_bytes(archive.read(name))
+        kept.append(name)
+    return kept
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("board", help="the name given to tools/build.py, a variant included (esp32s3_devkit.kitchen)")
     parser.add_argument("-p", "--port", help="write the image to the board over this serial port")
-    parser.add_argument("--fresh", action="store_true", help="with -p: do not keep the board's own files")
+    parser.add_argument("--device", help="upload the image over the network to this address or host name")
+    parser.add_argument("--user", default="admin", help="with --device: the web UI login")
+    parser.add_argument("--password", help="with --device: else PX_PASSWORD or asked for")
+    parser.add_argument("--fresh", action="store_true", help="with -p or --device: do not keep the board's own files")
     args = parser.parse_args()
+    if args.port and args.device:
+        fail("-p or --device, not both")
+    device = None
+    if args.device:
+        sys.path.insert(0, str(ROOT / "tools"))
+        import update
+
+        device = update.Device(args.device)
+        update.login(device, args.user, args.password)
 
     sdkconfig_path = firmware_sdkconfig(args.board)
     sdkconfig = sdkconfig_path.read_text(encoding="utf-8")
@@ -180,6 +222,9 @@ def main() -> None:
     if args.port and not args.fresh:
         for name in keep_device_files(args.port, out_dir, root):
             print(f"  kept from the board: {name}")
+    if device is not None and not args.fresh:
+        for name in keep_files_over_network(device, root):
+            print(f"  kept from the device: {name}")
     total = sum(z for _, _, z in files)
     for name, plain, zipped in files:
         print(f"  {name:32} {plain / 1024:7.1f} KB  gzip {zipped / 1024:6.1f} KB")
@@ -192,6 +237,13 @@ def main() -> None:
 
     if args.port:
         parttool(args.port, "write_partition", "--partition-name", "storage", "--input", str(image))
+    if device is not None:
+        print(f"uploading {image.stat().st_size // 1024} KB ...")
+        status, answer = device.request("/api/update/filesystem", data=image.read_bytes(), timeout=300,
+                                        content_type="application/octet-stream")
+        if status != 200:
+            fail(f"upload failed: {answer.get('error', status)}")
+        print("build_fs.py: uploaded")
 
 
 if __name__ == "__main__":

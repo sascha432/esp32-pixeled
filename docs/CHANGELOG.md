@@ -7,6 +7,61 @@ and what is gone under Removed. Updated in the same commit as the change ([CLAUD
 
 ## Unreleased (0.1.0)
 
+### 2026-11-03
+
+Added
+
+* Console: `mem tasks` lists every task's stack, its peak use and where it lives (needs
+  `CONFIG_FREERTOS_USE_TRACE_FACILITY`, off in the builds), from hassctrl.
+
+Changed
+
+* ESP32-S3: 21 KB of static data that only tasks touch (the network task's state, import
+  tables, pending settings writes, web and MQTT buffers, the live socket's clients) and mDNS in
+  PSRAM instead of internal RAM, as hassctrl; the recovery app keeps them internal, so it still
+  starts when the PSRAM fails.
+* Task stacks sized from a measurement with `mem tasks` (docs/TODO.md, "Task stacks"): web server
+  8 to 6 KB (also in the recovery app), console 6 to 4 KB, mDNS 4 to 3 KB, sound analysis 4 to
+  3 KB, UDP sound inputs 3 to 2.5 KB; 6.5 KB more internal RAM. While they run: `files.zip` 5 to
+  3.5 KB, the URL download 8 to 6 KB.
+
+### 2026-11-02
+
+Added
+
+* Web UI: the pages follow their state on one WebSocket per tab (`/api/live`) instead of asking
+  every 1 to 5 s; the LEDs page follows the light, the sound input and the presets on it, a preset
+  saved in another tab shows up. A hidden tab gets only a heartbeat every 10 s. Not in the recovery
+  app, whose pages ask every 3 s (`"live": false` in `/api/status`).
+* Build time next to the firmware version on the Status and System pages, in `/api/status`
+  (`device.built`) and in the boot log; every build stamps it, not only a full build.
+* Console: `sockets` lists lwIP's sockets with both ends; `wifi status` shows modem sleep
+  (`modem:` sleeps, awake and held by the LEDs or a web page, or the seconds until it sleeps).
+* `tools/build_fs.py <board> --device <address>`: the web image over the network, keeping the
+  device's own files (the presets, from `/api/fs/files.zip`).
+
+Changed
+
+* Wi-Fi modem sleep 5 minutes after the LEDs went off and the last web request, the first 5
+  minutes from the start; a web page that is shown keeps the Wi-Fi awake as the LEDs do (was: at
+  once with the LEDs off). `/api/status` has `wifi.modem_sleep`.
+* Web server: a session silent for 30 s is closed, TCP keep-alive finds a dead WebSocket; 24 lwIP
+  sockets and TCP connections (was 16), the budget checked at build time; `files.zip` is sent on a
+  task of its own, the other pages answer meanwhile, and its list of files grows with them (two
+  at once fit a board without PSRAM).
+* The captive portal's DNS listens only while the hotspot is on.
+* The LEDs page's preview closes while the tab is hidden and opens again when it shows.
+* `tools/update.py ... filesystem` needs `--fresh` (the image replaces the presets).
+  `tools/test_web.py` checks idle sessions, the live socket and a download next to the API.
+
+Fixed
+
+* A restart that hangs in a shutdown step ends anyway: every restart (console, web, button,
+  Home Assistant, update) arms the RTC watchdog for 5 s first; the next start then reports a
+  watchdog reset.
+* `tools/build_fs.py -p` kept nothing of a file system the device had formatted itself (its
+  superblock's name limit is LittleFS's own, 255, the tool mounted it with 64); it reads it now.
+
 ### 2026-10-23
 
 Changed

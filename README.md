@@ -13,12 +13,14 @@ The design is in [docs/architecture.md](docs/architecture.md) (infrastructure) a
 Built:
 
 * Wi-Fi with up to 5 networks, entered order or strongest signal, roaming on a weak signal;
-  modem sleep while the LEDs are off.
+  modem sleep 5 minutes after the LEDs went off and the web UI went idle.
 * Hotspot with a captive portal for the first setup (open while setting up), mDNS
   `<device>.local`.
 * Headless recovery: the hotspot opens after 5 minutes without Wi-Fi, or open when the board's
   hotspot button is held at boot.
-* Web UI: status, Wi-Fi, hotspot, MQTT, time, log, system (update, backup, restart, files), login.
+* Web UI: status, Wi-Fi, hotspot, MQTT, time, log, system (firmware version and build time,
+  update, backup, restart, files), login; the pages update live over one WebSocket per tab, a
+  download does not hold the other pages.
 * Clock over SNTP: time zone (an IANA name or a custom POSIX TZ rule) and two servers on the web
   UI's Time page (pool.ntp.org and time.cloudflare.com as built), in the backup.
 * Firmware and file system updates by upload or URL, rollback, a recovery app in the factory
@@ -141,9 +143,10 @@ The web pages are in `web/` (plain HTML, CSS and JavaScript, Bootstrap 5.3 CSS i
 `build/<board>/fs/storage.bin` from them: `tools/build_web.py` leaves out the pages of options the
 firmware lacks (`// #if CONFIG_*` blocks in the JS, none yet), keeps only the Bootstrap rules the
 pages use and minifies JS and CSS into `build/<board>/fs/web/`; `tools/build_fs.py` gzips that into
-`/www`, sized for the board's "storage" partition. Upload it on the System page, with
-`tools/update.py`, or over serial with `python tools/build_fs.py <board> -p COM9`. Without the
-image the device serves its built-in page; `/recovery` always serves that page.
+`/www`, sized for the board's "storage" partition. Upload it on the System page, over the network
+with `python tools/build_fs.py <board> --device 192.168.0.206`, or over serial with
+`python tools/build_fs.py <board> -p COM9`; both keep the device's presets. Without the image the
+device serves its built-in page; `/recovery` always serves that page.
 
 ## Update over the network
 
@@ -153,9 +156,11 @@ boards and waits for the new firmware:
 
 ```powershell
 python tools/update.py 192.168.0.206 firmware build/esp32s3_devkit/main/pixeled.bin
-python tools/update.py 192.168.0.206 filesystem build/esp32s3_devkit/fs/storage.bin
+python tools/update.py 192.168.0.206 filesystem build/esp32s3_devkit/fs/storage.bin --fresh
 ```
 
-The password is asked for, or taken from `PX_PASSWORD`. `python tools/test_web.py 192.168.0.206`
-checks the web server of a running device (login, refusals, load, a stalled client); it changes
-nothing on the device.
+A file system image replaces every file, the presets too, so `update.py` takes one only with
+`--fresh`; `tools/build_fs.py <board> --device <address>` keeps them. The password is asked for, or
+taken from `PX_PASSWORD`. `python tools/test_web.py 192.168.0.206` checks the web server of a
+running device (login, refusals, load, a stalled client, idle sessions, the live socket, a download
+next to the API); it changes nothing on the device.

@@ -148,7 +148,8 @@ esp_err_t start_microphone(const Config &config)
 
     // core 0 with Wi-Fi: the render task has core 1; the FFT takes about 1 ms per block
     const BaseType_t core = portNUM_PROCESSORS > 1 ? 0 : tskNO_AFFINITY;
-    ESP_RETURN_ON_FALSE(xTaskCreatePinnedToCore(task, "audio", 4096, nullptr, 4, nullptr, core) == pdPASS,
+    // 1332 bytes used at most (docs/TODO.md, "Task stacks", 2026-11-03)
+    ESP_RETURN_ON_FALSE(xTaskCreatePinnedToCore(task, "audio", 3072, nullptr, 4, nullptr, core) == pdPASS,
                         ESP_ERR_NO_MEM, kTag, "task");
     g_status.running = true;
     g_microphone = true;

@@ -17,7 +17,7 @@ Main pages                after login (the first one: LEDs)
                           sound input; power and timing
   Layout                  canvas size, panels (lane, place, size, first LED, runs, zigzag),
                           preview of the data path, "Show the edges"
-  Status                  device, Wi-Fi, hotspot, memory, uptime
+  Status                  device (firmware, build time), Wi-Fi, hotspot, memory, uptime
   Wi-Fi                   saved networks (up to 5), add, forget, reconnect
   Hotspot                 on or off, name, password (none during the setup), new password, when it
                           opens by itself
@@ -71,7 +71,8 @@ The web UI login page follows. The last page shows where the device is now reach
 ```
 
 When the device joins the home network, the phone may lose the hotspot for a moment
-(accepted). The page keeps polling and shows the result as soon as the phone is back. The hotspot
+(accepted). The page follows the state on the live socket (section 4.1), which comes back by
+itself, and shows the result as soon as the phone is back. The hotspot
 stays on, open, for 15 minutes after the first connection, so there is no hurry
 ([architecture.md](../../architecture.md) section 9.1).
 
@@ -117,8 +118,8 @@ stays on, open, for 15 minutes after the first connection, so there is no hurry
 ## 4. Main pages
 
 **LEDs.** At the top the card "Live": the canvas as drawn (before the brightness), a cell per
-LED, about 10 pictures a second over a WebSocket while the page is open (closed 3 s after leaving
-it; at most 4 viewers). The live controls send on change (a slider while it moves, at most every
+LED, about 10 pictures a second over a WebSocket while the page is open (closed within 3 s after
+leaving it or hiding the tab, opened again when the tab shows it; at most 4 viewers). The live controls send on change (a slider while it moves, at most every
 150 ms): the switch, brightness 1 to 255, the animation (an animation that needs sound, Spectrum,
 only with an audio source), the palette (only for an animation that takes one: "Its own colors",
 rainbow, party, ocean, forest, lava, heat, cloud, sunset, pastel, "Shades of the color"), the color
@@ -135,11 +136,12 @@ bytes, scrolling when wider than the matrix) with its scroll speed, or 24 hours 
 Save. Below them the state (on with the frames per second, or off, or why
 nothing is shown), "Sound" (hears sound or silence, with an audio source),
 the estimated power with "limited" when the limit dims the frames, and the LEDs and lanes.
-Refreshed every 2 s. The card "Sound input": 32 bars of the bands (bass on the left, grey in
+Followed live (section 4.1, checked every 2 s); the controls are not drawn over, they show what
+the page sent. The card "Sound input": 32 bars of the bands (bass on the left, grey in
 silence), where the sound comes from (microphone, WARLS, WLED audio sync, nothing), the input
 (sound with a "beat" badge, or silence), the loudest band and the reference (microphone) or the
 packets (UDP) and the loudness; the bars, the input and the loudness come with the live socket
-(20 times a second), the rest every 2 s (also the bars when the page gets no socket); a form with Save for the UDP inputs:
+(20 times a second) with the preview, the rest live (section 4.1, checked every 2 s; also the bars when the page gets no preview); a form with Save for the UDP inputs:
 WARLS (a switch and its port) and WLED audio sync (a switch); with a microphone a second form:
 gain (dB), automatic gain, silence below (dB), range (dB), beat threshold (times the bass), with
 a hint how they work together. With a motion sensor the card "Motion": "Off when nobody moves" (a switch),
@@ -192,7 +194,7 @@ sound: flags (1 active, 2 beat), loudness, the 32 bands).
 The recovery app has none of them (404); its LED pages say so.
 
 **MQTT.** The card "Connection" (state, the problem in words, connected for, the topics in use;
-refreshed every 2 s) and the form "Broker": Connect (a switch), the address (`mqtt://host:1883`
+live, checked every 2 s) and the form "Broker": Connect (a switch), the address (`mqtt://host:1883`
 or `mqtts://`), username, password (write-only: "stored" when there is one, an empty field keeps
 it, "Forget the password" removes it), the discovery prefix (`homeassistant`) and the base topic
 (empty: `pixeled/<device name>`); Save and connect. Code: `components/hass` (`api.cpp`). API:
@@ -200,7 +202,7 @@ it, "Forget the password" removes it), the discovery prefix (`homeassistant`) an
 `prefix`, `base`). Backup section `mqtt` without the password (a comment says where it may go).
 
 **Time.** The card "Clock" (the local time or "not set", the time zone with the POSIX rule it
-stands for, how long ago a server last answered; refreshed every second) and the form "Settings":
+stands for, how long ago a server last answered; live, checked every second) and the form "Settings":
 the time zone (the IANA names of the firmware grouped by region, "UTC (none set)" first, "Custom
 rule (POSIX TZ)" last, and "This browser's" when the browser's zone is in the list) and time
 server 1 and 2 (a host name or an address of up to 63 characters,
@@ -263,7 +265,9 @@ kept in the browser, a double-click goes back to the default. API: `GET /api/log
 +--------------------------------------------+
 ```
 
-**System.** Firmware and file system updates are uploaded here, see section 5. The
+**System.** The Device card shows the firmware version and its build time (`device.built` of
+`/api/status`, "2026-11-02 22:08", the building machine's local time), uptime and free memory.
+Firmware and file system updates are uploaded here, see section 5. The
 backup card sits above the update card, so the backup is seen before an update.
 
 Backup: one YAML file in two parts, the settings (the sections `network`, `leds` (state, power
@@ -284,7 +288,8 @@ the recovery app has no backup (404), and its System page shows no Backup card.
 | pixeled-1a2b                 [Wi-Fi]  [=] |
 +--------------------------------------------+
 | System                                     |
-|  Firmware  0.1.0      Uptime  3 d 4 h      |
+|  Firmware  0.1.0   Built  2026-11-02 22:08 |
+|  Uptime  3 d 4 h                           |
 |  Free memory  internal 84 KB, PSRAM 7 MB   |
 | +--------------------------------------+   |
 | | Backup (no passwords)                |   |
@@ -300,13 +305,56 @@ the recovery app has no backup (404), and its System page shows no Backup card.
 +--------------------------------------------+
 ```
 
+### 4.1 Live updates and sessions
+
+A page that shows a state which changes (Status, the setup's last step, Wi-Fi, Hotspot, MQTT,
+Time, LEDs) loads it once with its GET and then follows it on **one WebSocket per tab**,
+`GET /api/live` (`components/webserver/src/live.cpp`, `live()` in `web/app.js`). No page asks every
+few seconds any more.
+
+* The browser sends a text frame with the paths of the GETs it shows, up to 3 separated by a
+  space (the LEDs page: `/api/leds /api/audio /api/presets`), an empty frame for none: on a page
+  change and while the tab is hidden. The device answers with `{"path": "/api/leds", "state":
+  <the GET's answer>}` for each at once, then again whenever an answer changes. It looks every
+  second for Wi-Fi, Hotspot and Time, every 2 s for MQTT and the three of the LEDs page, every 3 s
+  for Status. The page drops a frame whose path it does not follow (one still on its way after a
+  page change).
+* The login is checked before the handshake (401 without it) and on every check afterwards: a
+  logout closes the socket of its browser, "Log out everywhere", a new password or an expired
+  session close every socket of that login.
+* The device sends `{}` after 10 s without a frame (also to a hidden tab). The browser sends nothing
+  while it follows a page, so a socket that died without a close (the device restarted, the laptop
+  slept) is found that way: after 25 s without a frame the app opens a new one. A socket that
+  closes is opened again after 1, 2, 4 ... 10 s and asks for its paths again. At most 8 live
+  sockets. The LEDs page's preview (`/api/leds/live`, section 4) is a socket of its own.
+* While a tab follows a page the Wi-Fi does not sleep ([architecture.md](../../architecture.md)
+  section 9.2); a hidden tab lets it.
+* The recovery app has no WebSocket support: `/api/status` says `"live": false` there, and `live()`
+  asks with the GETs every 3 s instead (not while the tab is hidden, not while the last one waits).
+
+The device's sessions (`components/webserver/src/idle.cpp`): a connection the browser keeps open
+after a request is closed by the device after **30 s without a byte** either way, so browsers that
+went away without closing theirs (a laptop that sleeps, a phone that leaves the network) do not
+pile up. Not the WebSockets (silent while nothing changes; TCP keep-alive finds a dead one: 30 s,
+then 3 probes 5 s apart) and not a long response. 12 sessions; with all taken the least recently
+used one is closed for a new client. That needs a free lwIP socket: the sessions, the server's own
+3, the captive DNS (only while the hotspot is on) and the device's own clients stay within the 24
+sockets (a `static_assert` in `webserver.cpp`; console `sockets` lists them).
+
+Long responses run on a task of its own (`px/webserver/async.hpp`), so they do not hold the other
+requests: `files.zip`. At most 3 at once; a fourth runs as before, on the server's task. Firmware
+and file system uploads stay on the server's task (a flash write stops the cache anyway).
+
 ## 5. Firmware update
 
 * **Update form**: the System page and the recovery page take a firmware image and a
   file system image, either as a file upload or as a URL the device downloads from.
 * **OTA over the network**: the same authenticated endpoints take the raw
   image as the request body (`POST /api/update/firmware`, `/api/update/filesystem`), so `curl
-  --data-binary` or `tools/update.py` push a build without a browser. `POST /api/update/url`
+  --data-binary` or `tools/update.py` push a build without a browser (a file system image only with
+  `--fresh`: it replaces every file, the presets too; `tools/build_fs.py <board> --device
+  <address>` puts the device's own files from `/api/fs/files.zip` into the image and uploads it).
+  `POST /api/update/url`
   makes the device download the image (http or https, common CA bundle, redirects followed);
   `GET /api/update` reports the app, what it can write and the progress. On a 4 MB board the
   main firmware answers 409 with `"recovery": true`; the page and the script restart the device

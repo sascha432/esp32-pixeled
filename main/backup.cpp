@@ -6,6 +6,7 @@
 #include <cstring>
 #include <iterator>
 
+#include "esp_attr.h"
 #include "esp_app_desc.h"
 #include "px/audio/audio.hpp"
 #include "px/board/board.hpp"
@@ -96,7 +97,8 @@ bool read_one_network(const Node &item, size_t number, net::ImportedNetwork &out
 void read_network(const Node &value, bool apply, backup::Report &report)
 {
     // the web server's task is the only caller; too large for its stack
-    static net::ImportedNetwork imported[net::kMaxImport];
+    // PSRAM on the S3 (an import is rare)
+    static EXT_RAM_BSS_ATTR net::ImportedNetwork imported[net::kMaxImport];
     static net::ImportResult result;
 
     const net::Status status = net::status();

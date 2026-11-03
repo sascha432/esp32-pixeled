@@ -6,9 +6,11 @@
 // The archive is streamed while it is sent: each file goes out with a local header, its data and
 // a data descriptor with the CRC and the size, which are only known at the end of the file; the
 // central directory at the end lists them all. Nothing larger than one read buffer is held in RAM
-// besides the list of entries. Files that cannot be opened or read to the end are named in
+// besides the list of entries, which grows with the files (two archives at once fit a board
+// without PSRAM). Files that cannot be opened or read to the end are named in
 // unreadable.txt inside the archive. With a file system that does not mount, the archive holds
-// only that note.
+// only that note. It is sent on a task of its own (px/webserver/async.hpp), with its stack in
+// internal RAM: LittleFS reads the flash.
 
 #include <algorithm>
 #include <cstdio>
@@ -19,6 +21,7 @@
 
 #include "esp_rom_crc.h"
 #include "px/platform/storage.hpp"
+#include "px/webserver/async.hpp"
 
 #include "http_util.hpp"
 
@@ -28,8 +31,13 @@ namespace {
 
 constexpr size_t kBufferSize = 4096;
 constexpr size_t kMaxEntries = 256;
+// the list of entries starts with this many and doubles
+constexpr size_t kFirstEntries = 16;
 constexpr size_t kMaxPath = 160;
 constexpr size_t kMaxNotes = 2048;
+// the task's stack: LittleFS, the directory walk (its paths on the heap) and the send; 2.5 KB used
+// at most (ESP32, 2026-11-03; the margin: docs/architecture.md section 4)
+constexpr uint32_t kZipStack = 3584;
 
 struct Entry {
     char name[kMaxPath]; // relative to /fs, no leading slash
@@ -38,11 +46,12 @@ struct Entry {
     uint32_t offset; // of its local header in the archive
 };
 
-// The archive being sent. One at a time: the web server has one task.
+// the archive being sent
 struct Zip {
     httpd_req_t *req = nullptr;
     Entry *entries = nullptr;
     size_t count = 0;
+    size_t capacity = 0;
     uint32_t offset = 0;
     bool failed = false; // the client went away
     char *notes = nullptr;
@@ -95,6 +104,16 @@ Entry *begin_entry(Zip &zip, const char *name)
     if (zip.count >= kMaxEntries) {
         note(zip, "%s: not in the archive, more than 256 files\n", name);
         return nullptr;
+    }
+    if (zip.count == zip.capacity) {
+        const size_t capacity = std::min(kMaxEntries, zip.capacity == 0 ? kFirstEntries : zip.capacity * 2);
+        auto *entries = static_cast<Entry *>(std::realloc(zip.entries, capacity * sizeof(Entry)));
+        if (entries == nullptr) {
+            note(zip, "%s: not in the archive, no memory for its entry\n", name);
+            return nullptr;
+        }
+        zip.entries = entries;
+        zip.capacity = capacity;
     }
     Entry &entry = zip.entries[zip.count++];
     std::snprintf(entry.name, sizeof(entry.name), "%.*s", static_cast<int>(sizeof(entry.name) - 1), name);
@@ -228,18 +247,13 @@ void finish(Zip &zip)
     send(zip, end, sizeof(end));
 }
 
-esp_err_t get_files_zip(httpd_req_t *req)
+esp_err_t send_zip(httpd_req_t *req)
 {
-    if (!require_login(req)) {
-        return ESP_OK;
-    }
     Zip zip;
     zip.req = req;
-    zip.entries = static_cast<Entry *>(std::calloc(kMaxEntries, sizeof(Entry)));
     zip.notes = static_cast<char *>(std::calloc(1, kMaxNotes));
     auto *buffer = static_cast<char *>(std::malloc(kBufferSize));
-    if (zip.entries == nullptr || zip.notes == nullptr || buffer == nullptr) {
-        std::free(zip.entries);
+    if (zip.notes == nullptr || buffer == nullptr) {
         std::free(zip.notes);
         std::free(buffer);
         return send_error(req, "503 Service Unavailable", "no memory");
@@ -268,6 +282,17 @@ esp_err_t get_files_zip(httpd_req_t *req)
     std::free(zip.notes);
     std::free(buffer);
     return ESP_OK;
+}
+
+esp_err_t get_files_zip(httpd_req_t *req)
+{
+    if (!require_login(req)) {
+        return ESP_OK;
+    }
+    if (run_async(req, [](httpd_req_t *copy) { send_zip(copy); }, AsyncStack::Internal, kZipStack)) {
+        return ESP_OK;
+    }
+    return send_zip(req);
 }
 
 esp_err_t post_format(httpd_req_t *req)

@@ -26,14 +26,12 @@ using webserver::detail::read_body;
 using webserver::detail::require_login;
 using webserver::detail::route;
 using webserver::detail::send_error;
-using webserver::detail::send_json;
 
-esp_err_t send_settings(httpd_req_t *req)
+// GET /api/mqtt, pushed on the live socket as well
+void write_mqtt(JsonWriter &json)
 {
     const Settings s = settings();
     const Status st = status();
-    char buffer[768];
-    JsonWriter json(buffer, sizeof(buffer));
     json.begin_object()
         .boolean("enabled", s.enabled)
         .string("uri", s.uri)
@@ -46,7 +44,11 @@ esp_err_t send_settings(httpd_req_t *req)
         .number("connected_s", st.connected_s)
         .string("topics", st.base)
         .end_object();
-    return send_json(req, json);
+}
+
+esp_err_t send_settings(httpd_req_t *req)
+{
+    return webserver::detail::send_state(req, write_mqtt);
 }
 
 esp_err_t get_mqtt(httpd_req_t *req)
@@ -111,6 +113,7 @@ esp_err_t post_mqtt(httpd_req_t *req)
 
 void register_routes(void *server)
 {
+    webserver::detail::add_live_topic("/api/mqtt", 2000, write_mqtt);
     const httpd_uri_t routes[] = {
         route("/api/mqtt", HTTP_GET, get_mqtt),
         route("/api/mqtt", HTTP_POST, post_mqtt),

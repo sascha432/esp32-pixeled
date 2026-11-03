@@ -28,15 +28,13 @@ using webserver::detail::read_body;
 using webserver::detail::require_login;
 using webserver::detail::route;
 using webserver::detail::send_error;
-using webserver::detail::send_json;
 
-esp_err_t send_state(httpd_req_t *req)
+// GET /api/audio, pushed on the live socket as well
+void write_audio(JsonWriter &json)
 {
     const Status s = status();
     const Settings c = settings();
     char slot[2] = {s.slot, 0};
-    static char buffer[1024]; // the server has one task
-    JsonWriter json(buffer, sizeof(buffer));
     const Inputs i = inputs();
     json.begin_object()
         .boolean("running", s.running)
@@ -68,7 +66,11 @@ esp_err_t send_state(httpd_req_t *req)
         .boolean("wled_sync", i.wled_sync)
         .end_object()
         .end_object();
-    return send_json(req, json);
+}
+
+esp_err_t send_state(httpd_req_t *req)
+{
+    return webserver::detail::send_state(req, write_audio);
 }
 
 esp_err_t get_audio(httpd_req_t *req)
@@ -159,6 +161,7 @@ esp_err_t post_audio(httpd_req_t *req)
 
 void register_routes(void *server)
 {
+    webserver::detail::add_live_topic("/api/audio", 2000, write_audio);
     const httpd_uri_t routes[] = {
         route("/api/audio", HTTP_GET, get_audio),
         route("/api/audio", HTTP_POST, post_audio),

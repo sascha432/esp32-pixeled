@@ -15,6 +15,7 @@
 #include <cstring>
 #include <initializer_list>
 
+#include "esp_attr.h"
 #include "px/input/input.hpp"
 #include "px/webserver/http.hpp"
 
@@ -41,7 +42,7 @@ esp_err_t send_state(httpd_req_t *req)
 {
     const Status s = status();
     const Settings c = settings();
-    static char buffer[2048]; // the server has one task
+    static EXT_RAM_BSS_ATTR char buffer[2048]; // the server's task; PSRAM on the S3
     JsonWriter json(buffer, sizeof(buffer));
     json.begin_object().boolean("running", s.running).begin_array("buttons");
     for (size_t i = 0; i < kMaxButtons; i++) {

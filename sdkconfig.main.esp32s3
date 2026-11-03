@@ -1,0 +1,12 @@
+# Main firmware on the ESP32-S3 (read by ESP-IDF after sdkconfig.main, docs/architecture.md section 2).
+# Every S3 board has PSRAM (boards/esp32s3_devkit).
+
+# Static objects that only tasks touch go to PSRAM (EXT_RAM_BSS_ATTR, PX_PSRAM_BSS; docs/architecture.md
+# section 11). Not in the recovery app (sdkconfig.recovery.* has no such layer): with it ESP-IDF aborts
+# the boot when the PSRAM fails, and the recovery app has to start then.
+CONFIG_SPIRAM_ALLOW_BSS_SEG_EXTERNAL_MEMORY=y
+
+# mDNS keeps its records, queues and packets in PSRAM, and its task stack: it answers a query now
+# and then and never writes the flash, so it runs with the stack outside the internal RAM.
+CONFIG_MDNS_MEMORY_ALLOC_SPIRAM=y
+CONFIG_MDNS_TASK_CREATE_FROM_SPIRAM=y

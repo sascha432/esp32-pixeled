@@ -8,7 +8,7 @@
 //   GET  /api/time/zones  the IANA names the firmware knows, sorted: ["Africa/Abidjan", ...]
 //
 // Only in the main firmware: main registers the routes (register_time_routes); the recovery app
-// keeps no time.
+// keeps no time. GET /api/time is pushed on the live socket as well. GET /api/time is pushed on the live socket as well.
 
 #include <cstdio>
 #include <cstring>
@@ -31,9 +31,10 @@ using detail::read_body;
 using detail::require_login;
 using detail::route;
 using detail::send_error;
-using detail::send_json;
+using detail::send_state;
 
-esp_err_t send_settings(httpd_req_t *req)
+// GET /api/time, pushed on the live socket as well
+void write_time(JsonWriter &json)
 {
     const std::time_t now = std::time(nullptr);
     const bool synced = platform::time_synced();
@@ -49,8 +50,6 @@ esp_err_t send_settings(httpd_req_t *req)
     const char *rule = zone[0] == 0 ? "UTC0" : platform::time_zone_rule(zone);
     const platform::TimeServers servers = platform::time_servers();
 
-    char buffer[512];
-    JsonWriter json(buffer, sizeof(buffer));
     json.begin_object()
         .boolean("synced", synced)
         .number("now", synced ? now : 0)
@@ -67,7 +66,11 @@ esp_err_t send_settings(httpd_req_t *req)
         json.string(nullptr, name);
     }
     json.end_array().end_object();
-    return send_json(req, json);
+}
+
+esp_err_t send_settings(httpd_req_t *req)
+{
+    return send_state(req, write_time);
 }
 
 esp_err_t get_time(httpd_req_t *req)
@@ -161,6 +164,7 @@ esp_err_t get_zones(httpd_req_t *req)
 
 void register_time_routes(void *server)
 {
+    detail::add_live_topic("/api/time", 1000, write_time);
     const httpd_uri_t routes[] = {
         route("/api/time", HTTP_GET, get_time),
         route("/api/time", HTTP_POST, post_time),

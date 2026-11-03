@@ -7,7 +7,9 @@
 #include <algorithm>
 #include <cstdio>
 #include <cstring>
+#include <new>
 
+#include "esp_attr.h"
 #include "esp_check.h"
 #include "esp_event.h"
 #include "esp_log.h"
@@ -31,20 +33,27 @@ constexpr uint8_t kHotspotMaxClients = 4;
 
 } // namespace
 
-Task t;
+// In PSRAM on the S3 (docs/architecture.md section 11): only the network task and start() use
+// it. That section starts as zeros, not as the image's values, so start() constructs it before the
+// first use (its defaults: retry_delay_ms, current, prefer).
+EXT_RAM_BSS_ATTR Task t;
 
 QueueHandle_t g_queue = nullptr;
 // set by the shutdown handler: the disconnect of a restart is not a lost connection
 volatile bool g_restarting = false;
-std::atomic<bool> g_power_save{false};
 SemaphoreHandle_t g_lock = nullptr;
+std::atomic<uint8_t> g_awake_holds{0};
+std::atomic<TickType_t> g_activity_at{0};
+std::atomic<bool> g_modem_sleep{false};
+std::atomic<bool> g_wake_posted{false};
 
 // copies for other tasks, guarded by g_lock
 Status g_status{};
 TickType_t g_hotspot_until = 0;
-SavedNetworkInfo g_saved[kMaxNetworks] = {};
+// in PSRAM on the S3; they start as zeros
+EXT_RAM_BSS_ATTR SavedNetworkInfo g_saved[kMaxNetworks] = {};
 size_t g_saved_count = 0;
-ScanEntry g_scan[kMaxScan] = {};
+EXT_RAM_BSS_ATTR ScanEntry g_scan[kMaxScan] = {};
 size_t g_scan_count = 0;
 
 namespace {
@@ -206,16 +215,6 @@ void handle_wifi_event(int32_t event, uint8_t reason)
     }
 }
 
-// Modem sleep as set_power_save last asked. With the hotspot on the driver keeps the radio awake
-// anyway (an access point cannot sleep).
-void apply_power_save()
-{
-    const bool on = g_power_save.load();
-    if (esp_wifi_set_ps(on ? WIFI_PS_MIN_MODEM : WIFI_PS_NONE) == ESP_OK) {
-        ESP_LOGI(kTag, "modem sleep %s", on ? "on" : "off");
-    }
-}
-
 void handle(const Msg &msg)
 {
     switch (msg.type) {
@@ -281,8 +280,11 @@ void handle(const Msg &msg)
         xSemaphoreGive(job.done);
         break;
     }
-    case MsgType::PowerSave:
-        apply_power_save();
+    case MsgType::Hold:
+        // handle_timers() looks at the holds
+        break;
+    case MsgType::Activity:
+        g_wake_posted.store(false);
         break;
     case MsgType::WifiEvent:
         handle_wifi_event(msg.event, msg.reason);
@@ -291,6 +293,40 @@ void handle(const Msg &msg)
         on_got_ip(msg.ip);
         break;
     }
+}
+
+// Modem sleep while no hold is on and kModemSleepDelayS have passed since the last activity
+// (docs/architecture.md section 9.2). With the hotspot on the driver keeps the radio awake
+// anyway (an access point cannot sleep).
+void update_modem_sleep()
+{
+    const TickType_t delay = pdMS_TO_TICKS(kModemSleepDelayS * 1000);
+    const uint8_t holds = g_awake_holds.load();
+    TickType_t at = g_activity_at.load();
+    int32_t since = static_cast<int32_t>(now() - at);
+    // the time stamp ages no further than the delay: a difference of ticks turns negative after
+    // 24 days (1 kHz tick) without activity; a newer activity of another task stays
+    if (since > static_cast<int32_t>(delay)) {
+        g_activity_at.compare_exchange_strong(at, now() - delay);
+        since = static_cast<int32_t>(now() - g_activity_at.load());
+    }
+    const bool idle = holds == 0 && since >= static_cast<int32_t>(delay);
+    t.status.awake_holds = holds;
+    t.status.modem_sleep_in_s = holds != 0 || idle ? 0
+                                : static_cast<uint32_t>(static_cast<int32_t>(delay) - std::max<int32_t>(since, 0)) *
+                                      portTICK_PERIOD_MS / 1000;
+    if (idle == t.modem_sleep) {
+        return;
+    }
+    const esp_err_t err = esp_wifi_set_ps(idle ? WIFI_PS_MIN_MODEM : WIFI_PS_NONE);
+    if (err != ESP_OK) {
+        ESP_LOGW(kTag, "modem sleep %s: %s", idle ? "on" : "off", esp_err_to_name(err));
+        return;
+    }
+    ESP_LOGI(kTag, "modem sleep %s", idle ? "on" : "off");
+    t.modem_sleep = idle;
+    t.status.modem_sleep = idle;
+    g_modem_sleep.store(idle);
 }
 
 void handle_timers()
@@ -334,6 +370,7 @@ void handle_timers()
         }
     }
     update_hotspot();
+    update_modem_sleep();
 }
 
 // the time until the next timer, at most a second (keeps the countdown in the status current)
@@ -423,6 +460,8 @@ using namespace detail;
 esp_err_t start(const char *device_name, Listener listener, void *context)
 {
     ESP_RETURN_ON_FALSE(g_queue == nullptr, ESP_ERR_INVALID_STATE, kTag, "already started");
+    // the defaults of `t`, which may live in the PSRAM .bss (zeros at the start)
+    new (&t) Task();
     g_lock = xSemaphoreCreateMutex();
     g_queue = xQueueCreate(16, sizeof(Msg));
     ESP_RETURN_ON_FALSE(g_lock != nullptr && g_queue != nullptr, ESP_ERR_NO_MEM, kTag, "queue");
@@ -467,14 +506,16 @@ esp_err_t start(const char *device_name, Listener listener, void *context)
     }
 
     t.status.ready = true;
+    // the modem sleeps kModemSleepDelayS after the start unless something holds it awake
+    g_activity_at.store(now());
     publish();
     ESP_RETURN_ON_FALSE(xTaskCreate(task, "network", 4096, nullptr, 5, nullptr) == pdPASS, ESP_ERR_NO_MEM, kTag,
                         "task");
     ESP_RETURN_ON_ERROR(esp_wifi_start(), kTag, "wifi start");
-    // Modem sleep only while the LEDs are off (set_power_save): with it every packet waits for the
-    // next beacon (ping 18 to 200 ms, single web requests up to seconds on the T4), too slow for
-    // realtime input and live controls.
-    apply_power_save();
+    // No modem sleep at first: with it every packet waits for the next beacon (ping 80 ms instead
+    // of 13 ms on the test board), too slow for realtime input and live controls.
+    // update_modem_sleep() turns it on when nothing holds the Wi-Fi awake.
+    esp_wifi_set_ps(WIFI_PS_NONE);
     ESP_LOGI(kTag, "%u saved networks, hotspot '%s' %s", t.stored.count, device_name,
              t.status.hotspot_on ? "on" : "off");
     return ESP_OK;

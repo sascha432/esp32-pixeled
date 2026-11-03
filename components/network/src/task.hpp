@@ -40,7 +40,10 @@ enum class MsgType : uint8_t {
     OpenHotspot,
     Pause,
     Import,
-    PowerSave,
+    // hold_awake changed g_awake_holds: the task looks at once
+    Hold,
+    // wake_activity while the modem sleeps
+    Activity,
     WifiEvent,
     GotIp,
 };
@@ -127,6 +130,7 @@ struct Task {
     TickType_t connect_started = 0;
     // the next connection scan tries this saved network first, once (add_network connect_now)
     int prefer = -1;
+    bool modem_sleep = false;
     Candidate switch_to{};
     wifi_ap_record_t records[kMaxScan];
 };
@@ -136,9 +140,14 @@ extern Task t;
 extern QueueHandle_t g_queue;
 // set by the shutdown handler: the disconnect of a restart is not a lost connection
 extern volatile bool g_restarting;
-// set_power_save's last value, also before the task runs
-extern std::atomic<bool> g_power_save;
 extern SemaphoreHandle_t g_lock;
+// hold_awake and wake_activity from any task: what keeps the modem awake (AwakeHold bits), the
+// tick of the last activity, the modem sleeps now (written by the task), an Activity message is on
+// its way
+extern std::atomic<uint8_t> g_awake_holds;
+extern std::atomic<TickType_t> g_activity_at;
+extern std::atomic<bool> g_modem_sleep;
+extern std::atomic<bool> g_wake_posted;
 
 // copies for other tasks, guarded by g_lock
 extern Status g_status;

@@ -18,6 +18,7 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "px/board/board.hpp"
+#include "px/platform/restart.hpp"
 #include "px/platform/storage.hpp"
 
 namespace px::ota {
@@ -477,7 +478,10 @@ esp_err_t start_download(Target target, const char *url)
     g_status = {State::Downloading, target, 0, 0, {}};
     taskEXIT_CRITICAL(&g_status_lock);
     // TLS needs the larger stack
-    if (xTaskCreate(download_task, "ota_download", 8192, job, 5, nullptr) != pdPASS) {
+    // 1.9 KB used at most over HTTP, 3.7 KB over HTTPS (the TLS handshake; ESP32, 2026-11-03); more
+    // than the margin of docs/architecture.md section 4, as other servers' certificate chains may
+    // cost more
+    if (xTaskCreate(download_task, "ota_download", 6144, job, 5, nullptr) != pdPASS) {
         delete job;
         set_state(State::Idle);
         return ESP_ERR_NO_MEM;
@@ -502,11 +506,11 @@ esp_err_t restart_into_firmware(uint32_t delay_ms)
 void restart_later(uint32_t delay_ms)
 {
     esp_timer_create_args_t args{};
-    args.callback = [](void *) { esp_restart(); };
+    args.callback = [](void *) { px::platform::restart(); };
     args.name = "restart";
     esp_timer_handle_t timer = nullptr;
     if (esp_timer_create(&args, &timer) != ESP_OK || esp_timer_start_once(timer, delay_ms * 1000ull) != ESP_OK) {
-        esp_restart();
+        px::platform::restart();
     }
 }
 

@@ -2,6 +2,8 @@
 
 #include <cstring>
 
+#include "px/memory/psram_bss.hpp"
+
 namespace px::network::detail {
 
 namespace {
@@ -47,8 +49,9 @@ void merge(const SavedNetwork *saved, size_t saved_count, int keep, const Import
 {
     out = {};
     result = {};
-    // about 2 KB, too much for the network task's stack; that task is the only caller
-    static Entry entries[kMaxImport + kMaxNetworks];
+    // about 2 KB, too much for the network task's stack; that task is the only caller. In PSRAM on
+    // the S3 (an import is rare), filled before it is read.
+    static PX_PSRAM_BSS Entry entries[kMaxImport + kMaxNetworks];
     size_t count = 0;
 
     // the file's networks in its order; a saved one keeps its password unless the file has one

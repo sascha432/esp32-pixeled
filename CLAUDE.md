@@ -10,6 +10,23 @@
   The shell state does not persist between tool calls, so every call starts with the `.` line.
 - Boards and ports: see README.md ("Supported hardware", "Flash") and docs/TODO.md. Flash the board
   under test after a change.
+- **Serial ports: never a plain `serial.Serial("COMx", ...)`.** That asserts DTR and RTS, which the
+  boards' auto-reset circuit (and the S3's and C3's own USB port) turn into a reset, losing the
+  live state (the modem sleep countdown, the LED state, the console log). Every ad-hoc script opens
+  the port with both lines released:
+
+  ```python
+  s = serial.Serial()
+  s.port, s.baudrate, s.timeout = "COM7", 115200, 0.2
+  s.dtr = False
+  s.rts = False
+  s.open()
+  ```
+
+  Checked 2026-11-02 on the test board (COM7, FTDI): opened this way the console answers and the
+  board keeps running, no boot banner. hassctrl measured the same on an S3's USB-Serial/JTAG port
+  (the plain form reset it 3 of 3 times on close, the released form 0 of 5); there the chip keeps
+  its USB connection through a reset, so only the uptime proves it.
 - **Style**: follow docs/architecture.md section 11 and the code around the change (free-function
   components, one owner task per state, `esp_err_t` / `std::expected`, `kCamel`, `g_`, `_member`).
 - **Feature list with every change.** `README.md` starts with the list of features. A feature that

@@ -15,3 +15,6 @@ CONFIG_MBEDTLS_TLS_CLIENT_ONLY=y
 # password. Plain WPA2 and WPA3 (SAE) stay.
 # CONFIG_ESP_WIFI_ENTERPRISE_SUPPORT is not set
 # CONFIG_ESP_WIFI_ENABLE_SAE_PK is not set
+
+# No WebSocket support (sdkconfig.main has it): no live socket in the recovery app, its pages ask
+# for their state every 3 s instead ("live": false in /api/status).

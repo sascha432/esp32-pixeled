@@ -122,8 +122,15 @@ esp_err_t post_login(httpd_req_t *req)
     return send_json(req, json);
 }
 
+// The cookie goes, and the live socket of the browser with it (the token itself stays valid until
+// it expires). After "log out everywhere" or a new password the live sockets end on their next
+// tick: their tokens no longer check (live.cpp).
 esp_err_t post_logout(httpd_req_t *req)
 {
+    char token[auth::kTokenSize];
+    if (session_token(req, token)) {
+        live_close_token(token);
+    }
     clear_session_cookie(req);
     char buffer[32];
     JsonWriter json(buffer, sizeof(buffer));

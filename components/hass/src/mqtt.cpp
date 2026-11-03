@@ -9,6 +9,7 @@
 #include <iterator>
 
 #include "cJSON.h"
+#include "esp_attr.h"
 #include "esp_check.h"
 #include "esp_log.h"
 #include "esp_system.h"
@@ -19,6 +20,7 @@
 #include "px/effects/effects.hpp"
 #include "px/formats/json_writer.hpp"
 #include "px/leds/leds.hpp"
+#include "px/platform/restart.hpp"
 #include "px/platform/settings.hpp"
 #include "px/presets/presets.hpp"
 
@@ -263,7 +265,7 @@ void announce_all()
 {
     // the client's task on connect, the timer's when the audio source changes (it sends only after
     // the connect's announce: g_sent is cleared there)
-    static char buffer[1536];
+    static EXT_RAM_BSS_ATTR char buffer[1536]; // PSRAM on the S3
     char command[kTopicSize * 2], state[kTopicSize * 2];
     const bool audio = has_audio();
 
@@ -599,7 +601,7 @@ void on_timer(void *)
     // the presets: their names again when the list changed, and the one the light matches
     const uint32_t revision = presets::revision();
     if (g_sent.presets_valid && g_sent.presets_revision != revision) {
-        static char buffer[1536]; // the timer's task only
+        static EXT_RAM_BSS_ATTR char buffer[1536]; // the timer's task only; PSRAM on the S3
         announce_presets(buffer, sizeof(buffer));
     }
     const size_t preset = presets::current();
@@ -858,7 +860,7 @@ void handle_data(const esp_mqtt_event_t &event)
     topic(expected, "restart");
     if (std::strcmp(name, expected) == 0) {
         ESP_LOGI(kTag, "restart from Home Assistant");
-        esp_restart();
+        px::platform::restart();
     }
 }
 

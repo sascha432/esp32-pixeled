@@ -8,4 +8,4 @@ idf_component_register(SRCS "src/merge.cpp"
                             "src/station.cpp"
                             "src/store.cpp"
                        INCLUDE_DIRS "include"
-                       PRIV_REQUIRES esp_event esp_http_client esp_netif esp_wifi platform)
+                       PRIV_REQUIRES esp_event esp_http_client esp_netif esp_wifi memory platform)

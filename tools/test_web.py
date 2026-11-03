@@ -9,6 +9,7 @@ standard library.
 """
 
 import argparse
+import base64
 import concurrent.futures
 import getpass
 import gzip
@@ -59,6 +60,247 @@ class Client:
         except ValueError:
             data = raw.decode(errors="replace")
         return response.status, data, dict(response.getheaders())
+
+
+def idle_connections_test(device: str, count: int = 20) -> None:
+    """Browsers keep connections open; one that goes away without closing them (a laptop that
+    sleeps, a phone that leaves the network) leaves them open on the device. More of them than the
+    device has sockets must not lock out a new client (hassctrl, 2026-10-31: 11 of them left by a
+    page, every accept failed with ENFILE until Wi-Fi reconnected)."""
+    idle: list[socket.socket] = []
+    refused = 0
+    for _ in range(count):
+        try:
+            s = socket.create_connection((device, 80), timeout=5)
+            s.sendall(f"GET /api/session HTTP/1.1\r\nHost: {device}\r\nConnection: keep-alive\r\n\r\n".encode())
+            answer = s.recv(4096)
+            if not answer.startswith(b"HTTP/1.1 200"):
+                raise OSError(answer[:40])
+            idle.append(s)
+        except OSError:
+            refused += 1
+    time.sleep(1)
+    try:
+        status, _, _ = Client(device).request("GET", "/api/session", timeout=10)
+    except OSError as e:
+        status = f"{type(e).__name__} {e}"
+    check(status == 200, f"a new client while {count} connections stay open",
+          f"{status}, {len(idle)} answered, {refused} refused")
+    for s in idle:
+        s.close()
+    time.sleep(1)
+    try:
+        status, _, _ = Client(device).request("GET", "/api/session", timeout=10)
+    except OSError as e:
+        status = f"{type(e).__name__} {e}"
+    check(status == 200, "a new client after they closed", str(status))
+
+
+def read_answer(sock: socket.socket) -> bytes:
+    """One whole answer on a kept connection: the headers, then Content-Length bytes of body."""
+    data = b""
+    while b"\r\n\r\n" not in data:
+        chunk = sock.recv(4096)
+        if not chunk:
+            return data
+        data += chunk
+    head, body = data.split(b"\r\n\r\n", 1)
+    length = next((int(line.split(b":", 1)[1]) for line in head.split(b"\r\n")
+                   if line.lower().startswith(b"content-length:")), 0)
+    while len(body) < length:
+        chunk = sock.recv(4096)
+        if not chunk:
+            break
+        body += chunk
+    return head + b"\r\n\r\n" + body
+
+
+def idle_close_test(device: str) -> None:
+    """A session silent for 30 s is closed by the device; one with a request every 10 s stays."""
+    request = f"GET /api/session HTTP/1.1\r\nHost: {device}\r\nConnection: keep-alive\r\n\r\n".encode()
+    silent = []
+    for _ in range(5):
+        s = socket.create_connection((device, 80), timeout=5)
+        s.sendall(request)
+        read_answer(s)
+        silent.append(s)
+    busy = socket.create_connection((device, 80), timeout=5)
+    busy_ok = True
+    for _ in range(4):
+        busy.sendall(request)
+        busy_ok = busy_ok and read_answer(busy).startswith(b"HTTP/1.1 200")
+        time.sleep(10)
+    closed = 0
+    for s in silent:
+        s.settimeout(2)
+        try:
+            closed += s.recv(16) == b""
+        except OSError:
+            closed += 1
+        s.close()
+    check(closed == len(silent), "silent sessions are closed after 30 s", f"{closed} of {len(silent)} after 40 s")
+    try:
+        busy.sendall(request)
+        busy_ok = busy_ok and read_answer(busy).startswith(b"HTTP/1.1 200")
+    except OSError:
+        busy_ok = False
+    busy.close()
+    check(busy_ok, "a session with a request every 10 s stays open")
+
+
+class LiveSocket:
+    """A minimal WebSocket client (RFC 6455) for /api/live: text frames, standard library only."""
+
+    def __init__(self, device: str, cookie: str):
+        self.sock = socket.create_connection((device, 80), timeout=5)
+        key = base64.b64encode(os.urandom(16)).decode()
+        self.sock.sendall((f"GET /api/live HTTP/1.1\r\nHost: {device}\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n"
+                           f"Sec-WebSocket-Key: {key}\r\nSec-WebSocket-Version: 13\r\n"
+                           + (f"Cookie: {cookie}\r\n" if cookie else "") + "\r\n").encode())
+        head = b""
+        while b"\r\n\r\n" not in head:
+            chunk = self.sock.recv(1024)
+            if not chunk:
+                break
+            head += chunk
+        self.status = int(head.split(b" ", 2)[1]) if head.startswith(b"HTTP/") else 0
+        self.buffer = head.split(b"\r\n\r\n", 1)[1] if b"\r\n\r\n" in head else b""
+
+    def send(self, text: str) -> None:
+        data = text.encode()
+        mask = os.urandom(4)
+        self.sock.sendall(bytes([0x81, 0x80 | len(data)]) + mask + bytes(b ^ mask[i % 4] for i, b in enumerate(data)))
+
+    def _read(self, n: int) -> bytes:
+        while len(self.buffer) < n:
+            chunk = self.sock.recv(4096)
+            if not chunk:
+                raise ConnectionError("closed by the device")
+            self.buffer += chunk
+        out, self.buffer = self.buffer[:n], self.buffer[n:]
+        return out
+
+    def receive(self, timeout: float, heartbeat: bool = False) -> dict | None:
+        """The next text frame as JSON, None when none came within `timeout` s. The heartbeat `{}`
+        is skipped unless `heartbeat`."""
+        deadline = time.time() + timeout
+        while True:
+            message = self._frame(max(0.01, deadline - time.time()))
+            if message is None or message != {} or heartbeat:
+                return message
+
+    def _frame(self, timeout: float) -> dict | None:
+        self.sock.settimeout(timeout)
+        try:
+            first, second = self._read(2)
+        except socket.timeout:
+            return None
+        length = second & 0x7F
+        if length == 126:
+            length = int.from_bytes(self._read(2), "big")
+        elif length == 127:
+            length = int.from_bytes(self._read(8), "big")
+        payload = self._read(length)
+        if first & 0x0F == 0x8:
+            raise ConnectionError("closed by the device")
+        return json.loads(payload) if first & 0x0F == 0x1 else self._frame(timeout)
+
+    def close(self) -> None:
+        self.sock.close()
+
+
+def live_test(device: str, cookie: str, user: str, password: str) -> None:
+    """The web app's live socket (docs/ui/web/web-app.md section 4.1)."""
+    live = LiveSocket(device, "")
+    check(live.status == 401, "the live socket without login is 401", str(live.status))
+    live.close()
+
+    live = LiveSocket(device, cookie)
+    check(live.status == 101, "the live socket opens with the login", str(live.status))
+    live.send("/api/status")
+    first = live.receive(3)
+    check(first is not None and first.get("path") == "/api/status", "the state comes at once",
+          str(first)[:80])
+    second = live.receive(5)
+    uptimes = [m["state"]["device"]["uptime_s"] for m in (first, second) if m]
+    check(len(uptimes) == 2 and uptimes[1] > uptimes[0], "a change comes by itself (uptime)", str(uptimes))
+    _, got, _ = Client(device).request("GET", "/api/status", headers={"Cookie": cookie})
+    check(second is not None and set(second["state"]) == set(got), "the pushed state has the keys of the GET",
+          str(sorted(got))[:80])
+    # a page follows up to 3 paths on one socket (the LEDs page)
+    live.send("/api/status /api/hotspot /api/nothing")
+    paths = set()
+    for _ in range(4):
+        message = live.receive(3)
+        if message is None:
+            break
+        paths.add(message.get("path"))
+    check({"/api/status", "/api/hotspot"} <= paths, "two paths in one frame both come", str(sorted(map(str, paths))))
+    live.send("")
+    check(live.receive(4) is None, "an empty frame stops it")
+    live.send("/api/nothing")
+    check(live.receive(3) is None, "an unknown path sends nothing")
+    check(live.receive(12, heartbeat=True) == {}, "a heartbeat {} comes at least every 10 s")
+    time.sleep(38)
+    live.send("/api/status")
+    try:
+        after = live.receive(3)
+    except ConnectionError:
+        after = None
+    check(after is not None, "the live socket stays open after 40 s of silence (no idle close)")
+    live.close()
+
+    # a logout closes the live socket of its browser
+    other = Client(device)
+    other.request("POST", "/api/login", form={"username": user, "password": password, "remember": "0"})
+    live = LiveSocket(device, other.cookie)
+    live.send("/api/status")
+    live.receive(3)
+    other.request("POST", "/api/logout", form={})
+    try:
+        while live.receive(3) is not None:
+            pass
+        closed = False
+    except ConnectionError:
+        closed = True
+    check(closed, "a logout closes its live socket")
+    live.close()
+
+
+def long_response_test(c: Client, device: str) -> None:
+    """A long download runs on a task of its own (px/webserver/async.hpp): the API answers meanwhile.
+    The answer shares the Wi-Fi with the download, so it is not instant; on the server's task it
+    waited for the whole download. Passes when it came in a fifth of the download's time, at most 3 s."""
+    def download(path: str) -> tuple[int, bytes, float]:
+        started = time.time()
+        conn = http.client.HTTPConnection(device, timeout=120)
+        conn.request("GET", path, headers={"Cookie": c.cookie, "Accept-Encoding": "identity"})
+        response = conn.getresponse()
+        data = response.read()
+        conn.close()
+        return response.status, data, time.time() - started
+
+    def answer_time() -> float:
+        started = time.time()
+        Client(device).request("GET", "/api/session", timeout=30)
+        return time.time() - started
+
+    with concurrent.futures.ThreadPoolExecutor(max_workers=2) as pool:
+        zips = [pool.submit(download, "/api/fs/files.zip") for _ in range(2)]
+        time.sleep(0.5)
+        waited = answer_time()
+        results = [z.result() for z in zips]
+    valid = 0
+    for status, data, _ in results:
+        try:
+            with zipfile.ZipFile(io.BytesIO(data)) as z:
+                valid += status == 200 and z.testzip() is None
+        except zipfile.BadZipFile:
+            pass
+    took = min(r[2] for r in results)
+    check(waited < min(3.0, took / 5) or took < 1.0, "the API answers while two files.zip are sent",
+          f"{waited:.2f} s, the archives took {took:.1f} s")
+    check(valid == 2, "two files.zip at once are both valid archives", f"{valid} of 2")
 
 
 def main() -> None:
@@ -114,7 +356,8 @@ def main() -> None:
     check("HttpOnly" in cookie_header and "SameSite=Strict" in cookie_header, "the session cookie is HttpOnly and SameSite=Strict",
           cookie_header)
     status, s, _ = c.request("GET", "/api/status")
-    check(status == 200 and "device" in s and "wifi" in s, "GET /api/status", f"heap {s.get('device', {}).get('heap_internal_kb')} KB")
+    check(status == 200 and "device" in s and "wifi" in s and s["device"].get("built"), "GET /api/status",
+          f"heap {s.get('device', {}).get('heap_internal_kb')} KB, built {s.get('device', {}).get('built')}")
     heap_before = s["device"]["heap_internal_kb"] if status == 200 else 0
     status, w, _ = c.request("GET", "/api/wifi")
     check(status == 200 and "saved" in w, "GET /api/wifi", f"{len(w.get('saved', []))} saved")
@@ -189,6 +432,13 @@ def main() -> None:
     stall.close()
     check(status == 200 and waited < 30, "a stalled upload does not block other requests for long",
           f"{status} after {waited:.1f} s")
+    idle_connections_test(args.device)
+    long_response_test(c, args.device)
+    idle_close_test(args.device)
+    if s.get("live"):
+        live_test(args.device, c.cookie, args.user, password)
+    else:
+        print("  (no live socket, the recovery app: the live test skipped)")
 
     time.sleep(1)
     status, s, _ = c.request("GET", "/api/status")

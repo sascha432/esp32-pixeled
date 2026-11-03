@@ -194,7 +194,8 @@ esp_err_t start_udp_task()
     started = true;
     // core 0 with Wi-Fi; the render task has core 1
     const BaseType_t core = portNUM_PROCESSORS > 1 ? 0 : tskNO_AFFINITY;
-    if (xTaskCreatePinnedToCore(task, "audio_udp", 3072, nullptr, 4, nullptr, core) != pdPASS) {
+    // 1340 bytes used at most with WARLS and WLED packets (docs/TODO.md, "Task stacks", 2026-11-03)
+    if (xTaskCreatePinnedToCore(task, "audio_udp", 2560, nullptr, 4, nullptr, core) != pdPASS) {
         return ESP_ERR_NO_MEM;
     }
     return ESP_OK;

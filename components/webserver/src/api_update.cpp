@@ -31,7 +31,8 @@ namespace px::webserver::detail {
 namespace {
 
 constexpr size_t kChunk = 4096;
-// a stalled upload blocks the server (one task): at most 3 receive timeouts of 5 s in a row
+// An image goes up on the server's task (a flash write stops the cache, a task of its own would
+// gain nothing): an upload that stops ends after 3 receive timeouts of 5 s in a row.
 constexpr int kMaxTimeouts = 3;
 constexpr uint32_t kRestartDelayMs = 1000;
 

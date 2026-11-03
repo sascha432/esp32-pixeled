@@ -17,7 +17,6 @@ class HttpError extends Error {
 }
 
 let session = {};
-let refreshTimer = null;
 
 // GET, or POST with a form (an object, or FormData for files); JSON answers. A 401 leads to the login.
 async function api(path, form) {
@@ -63,10 +62,103 @@ async function busy(button, action) {
   }
 }
 
-function refresh(action, ms) {
-  clearInterval(refreshTimer);
-  refreshTimer = setInterval(() => action().catch(() => {}), ms);
+// The live socket (docs/ui/web/web-app.md section 4.1): one WebSocket for the app instead of
+// pages that ask every few seconds. live(path, onData) follows one GET: the device sends its answer
+// at once and again whenever it changes, `onData` gets it. A page follows up to 3 paths (the LEDs
+// page: the light, the sound, the presets). A route change stops them (liveStop), a hidden tab
+// pauses them; a lost socket comes back by itself after 1, 2, 4 ... 10 s and asks again. The
+// recovery app has no live socket (`"live": false` in /api/status): when one does not open and the
+// device says so, live() asks with the GETs every 3 s instead (a tick skipped while the last waits
+// or the tab is hidden). A device that restarts says nothing: the socket keeps trying.
+const liveState = { socket: null, follows: new Map(), retry: 1000, timer: null, polling: false, poll: null, seen: 0, queued: false };
+
+// The device sends at least `{}` every 10 s; a socket silent for 25 s died without a close (the
+// device restarted, the laptop slept) and is opened again.
+setInterval(() => {
+  const socket = liveState.socket;
+  if (!socket || socket.readyState !== WebSocket.OPEN || Date.now() - liveState.seen <= 25000) return;
+  // its close handshake can wait long on a dead link: let it go and open a new one at once
+  socket.onclose = socket.onmessage = null;
+  socket.close();
+  liveState.socket = null;
+  liveConnect();
+}, 5000);
+
+// the paths followed, in one frame; several live() calls of a page go out together
+function liveSend() {
+  if (liveState.queued) return;
+  liveState.queued = true;
+  queueMicrotask(() => {
+    liveState.queued = false;
+    const socket = liveState.socket;
+    if (socket && socket.readyState === WebSocket.OPEN) socket.send(document.hidden ? "" : [...liveState.follows.keys()].join(" "));
+  });
 }
+
+function livePoll() {
+  clearInterval(liveState.poll);
+  let waiting = false;
+  liveState.poll = setInterval(() => {
+    if (!liveState.follows.size || waiting || document.hidden) return;
+    waiting = true;
+    Promise.all([...liveState.follows].map(([path, onData]) =>
+      api(path).then((state) => liveState.follows.get(path) === onData && onData(state)).catch(() => {})))
+      .finally(() => (waiting = false));
+  }, 3000);
+}
+
+function liveConnect() {
+  clearTimeout(liveState.timer);
+  if (liveState.socket || !liveState.follows.size || liveState.polling) return;
+  const socket = new WebSocket(`${location.protocol === "https:" ? "wss" : "ws"}://${location.host}/api/live`);
+  liveState.socket = socket;
+  let opened = false;
+  socket.onopen = () => {
+    opened = true;
+    liveState.seen = Date.now();
+    liveState.retry = 1000;
+    liveSend();
+  };
+  socket.onmessage = (event) => {
+    liveState.seen = Date.now();
+    let message;
+    try { message = JSON.parse(event.data); } catch (e) { return; }
+    // a frame of the page before is still on its way after a route change
+    const onData = liveState.follows.get(message.path);
+    if (!onData) return;
+    Promise.resolve().then(() => onData(message.state)).catch(() => {});
+  };
+  socket.onclose = () => {
+    liveState.socket = null;
+    if (!liveState.follows.size) return;
+    if (!opened) {
+      fetch("/api/status", { cache: "no-store" }).then((r) => r.json()).then((s) => {
+        if (s.live !== false || liveState.polling) return;
+        liveState.polling = true;
+        clearTimeout(liveState.timer);
+        livePoll();
+      }).catch(() => {});
+    }
+    liveState.timer = setTimeout(liveConnect, liveState.retry);
+    liveState.retry = Math.min(liveState.retry * 2, 10000);
+  };
+}
+
+function live(path, onData) {
+  liveState.follows.set(path, onData);
+  if (liveState.socket) liveSend();
+  else liveConnect();
+}
+
+function liveStop() {
+  liveState.follows.clear();
+  liveSend();
+}
+
+document.addEventListener("visibilitychange", () => {
+  if (liveState.socket) liveSend();
+  else if (!document.hidden) liveConnect();
+});
 
 function render(html) {
   $("#page").innerHTML = html;
@@ -112,7 +204,11 @@ function closeMenuOnPhone() {
 }
 
 async function updateHeader() {
-  const s = await api("/api/status");
+  return showHeader(await api("/api/status"));
+}
+
+// the device name and the Wi-Fi icon, from /api/status
+function showHeader(s) {
   $("#device-name").textContent = s.device.name;
   document.title = s.device.name;
   const icon = $("#icon-wifi");
@@ -126,7 +222,7 @@ async function updateHeader() {
 
 async function route() {
   const name = location.hash.replace(/^#\/?/, "") || "leds";
-  clearInterval(refreshTimer);
+  liveStop();
   // a wide page (the LED layout) uses the whole width, every other page one column
   $("#page").classList.toggle("app-wide", widePages.includes(name));
   $("#page").style.maxWidth = "";
@@ -256,8 +352,7 @@ function setupLogin() {
 async function setupDone() {
   frame(false, "3 / 3");
   render(`<h1>Done</h1><div class="card"><div class="card-body" id="done">Checking the Wi-Fi ...</div></div>`);
-  const draw = async () => {
-    const s = await api("/api/status");
+  const draw = (s) => {
     const w = s.wifi;
     const box = $("#done");
     if (!box) return;
@@ -279,8 +374,8 @@ async function setupDone() {
       go("status");
     });
   };
-  await draw();
-  refresh(draw, 3000);
+  draw(await api("/api/status"));
+  live("/api/status", draw);
 }
 
 // -------------------------------------------------------------------------------------- login
@@ -346,8 +441,8 @@ const views = {
   },
   async status() {
     render(`<h1>Status</h1><div id="status-cards">Loading ...</div>`);
-    const draw = async () => {
-      const s = await updateHeader();
+    const draw = (s) => {
+      showHeader(s);
       const w = s.wifi, h = s.hotspot, d = s.device;
       const box = $("#status-cards");
       if (!box) return;
@@ -362,13 +457,13 @@ const views = {
           ["Turns off in", h.off_in_s ? duration(h.off_in_s) : "-"],
         ])) +
         card("Device", facts([
-          ["Firmware", esc(d.firmware)], ["Uptime", duration(d.uptime_s)],
+          ["Firmware", esc(d.firmware)], ["Built", esc(d.built)], ["Uptime", duration(d.uptime_s)],
           ["Free memory", `${d.heap_internal_kb} KB internal, ${d.heap_psram_kb} KB PSRAM`],
           ["File system", esc(s.fs.state) + (s.fs.state === "mounted" ? `, ${s.fs.used_kb} of ${s.fs.total_kb} KB used` : "")],
         ]));
     };
-    await draw();
-    refresh(draw, 3000);
+    draw(await api("/api/status"));
+    live("/api/status", draw);
   },
 
   async wifi() {
@@ -377,6 +472,8 @@ const views = {
         <button id="rescan" class="btn btn-sm btn-outline-secondary ms-auto" type="button">Scan</button></h2>
         <div id="wifi-add"></div></div></div>`);
     let w = await api("/api/wifi");
+    // a saved network's password is being typed in its row
+    let editing = false;
     const drawSaved = () => {
       const rows = w.saved.map((n, i) => `
         <li class="list-group-item d-flex align-items-center gap-2">
@@ -410,17 +507,16 @@ const views = {
             <button class="btn btn-sm btn-primary" type="button">Save</button>
             <button class="btn btn-sm btn-outline-secondary" type="button">Cancel</button>`;
           const [input, save, cancel] = item.querySelectorAll("input,button");
+          editing = true;
           input.focus();
-          cancel.onclick = (e) => { e.stopPropagation(); drawSaved(); };
+          cancel.onclick = (e) => { e.stopPropagation(); editing = false; drawSaved(); };
           save.onclick = (e) => {
             e.stopPropagation();
             busy(save, async () => {
               await api("/api/wifi/add", { ssid, password: input.value });
               toast(`Saved ${ssid}`, "success");
-              await sleep(300);
-              w = await api("/api/wifi");
-              drawSaved();
-              drawAdd(); // its "saved" tags follow the saved networks
+              editing = false;
+              drawSaved(); // a push that came meanwhile was not drawn
             });
           };
           input.onkeydown = (e) => { if (e.key === "Enter") save.click(); };
@@ -434,10 +530,7 @@ const views = {
           } else {
             await api("/api/wifi/move", { index: b.dataset.index, delta: b.dataset.move });
           }
-          await sleep(300);
-          w = await api("/api/wifi");
-          drawSaved();
-          drawAdd();
+          // the list follows with the next push
         });
       };
       $("#policy").onchange = (event) => api("/api/wifi/policy", { policy: event.target.value })
@@ -456,21 +549,40 @@ const views = {
         if (!ssid) throw new Error("choose a network");
         await api("/api/wifi/add", { ssid, password: $("#wifi-password").value });
         toast(`Saved ${ssid}`, "success");
-        await sleep(300);
-        w = await api("/api/wifi");
-        drawSaved();
-        drawAdd();
+        // done with the picker: the next push may draw it with the network's "saved" tag
+        $("#wifi-password").value = "";
+        document.activeElement.blur();
       });
     };
     drawSaved();
     drawAdd();
     $("#rescan").onclick = (e) => busy(e.target, async () => { w = await scanNetworks(); drawAdd(); });
+    // A push draws what changed. Not the list while a password is typed into it, not the picker
+    // while it has the focus or a password: a choice half made stays.
+    let shown = JSON.stringify(w);
+    // what was not drawn while picking, once the picker is left without a password typed
+    let pickerBehind = false;
+    live("/api/wifi", (data) => {
+      const before = JSON.parse(shown);
+      shown = JSON.stringify(data);
+      w = data;
+      const savedChanged = JSON.stringify([before.saved, before.policy]) !== JSON.stringify([w.saved, w.policy]);
+      if (savedChanged && !editing) drawSaved();
+      const add = $("#wifi-add");
+      const busyPicking = add.contains(document.activeElement) || ($("#wifi-password")?.value ?? "") !== "";
+      if ((savedChanged || JSON.stringify(before.scan) !== JSON.stringify(w.scan)) && !busyPicking) drawAdd();
+      else if (busyPicking) pickerBehind = true;
+    });
+    $("#wifi-add").addEventListener("focusout", (event) => {
+      if (!pickerBehind || $("#wifi-add").contains(event.relatedTarget) || $("#wifi-password")?.value) return;
+      pickerBehind = false;
+      drawAdd();
+    });
   },
 
   async hotspot() {
     render(`<h1>Hotspot</h1><div id="hotspot">Loading ...</div>`);
-    const draw = async () => {
-      const h = await api("/api/hotspot");
+    const draw = (h) => {
       const box = $("#hotspot");
       if (!box || box.contains(document.activeElement)) return;
       box.innerHTML = card("Hotspot", `
@@ -486,17 +598,22 @@ const views = {
         '<p class="small text-body-secondary">The hotspot is on by itself while no Wi-Fi is set up and for 15 minutes after the setup. ' +
         "A device that has no Wi-Fi for 5 minutes opens it too (with the password), and the hotspot button (Buttons on the LEDs page) held while the device starts " +
         "opens it without one; both stay until 15 minutes after the Wi-Fi is back.</p>";
+      // the new state follows with the next push (a focused switch is not drawn over: blur it)
       $("#hotspot-on").onchange = (event) => api("/api/hotspot", { on: event.target.checked ? "1" : "0" })
-        .then(() => sleep(500)).then(draw, (e) => toast(e.message, "danger"));
+        .then(() => event.target.blur(), (e) => toast(e.message, "danger"));
       $("#new-password").onclick = (e) => busy(e.target, async () => {
         if (!confirm("New hotspot password? Devices on the hotspot have to join again.")) return;
         await api("/api/hotspot/password", {});
-        await sleep(500);
-        await draw();
+        e.target.blur();
       });
     };
-    await draw();
-    refresh(draw, 5000);
+    // a push that came while a control had the focus is drawn when the focus leaves
+    let latest = await api("/api/hotspot");
+    draw(latest);
+    live("/api/hotspot", (h) => draw((latest = h)));
+    $("#hotspot").addEventListener("focusout", (event) => {
+      if (!$("#hotspot").contains(event.relatedTarget)) setTimeout(() => draw(latest));
+    });
   },
 
   // MQTT and Home Assistant discovery (docs/ui/web/web-app.md section 4)
@@ -568,7 +685,7 @@ const views = {
       m = await api("/api/mqtt", { forget_password: "1" });
       go("mqtt");
     });
-    refresh(async () => { m = await api("/api/mqtt"); drawStatus(); }, 2000);
+    live("/api/mqtt", (state) => { m = state; drawStatus(); });
   },
 
   // the clock: time zone and SNTP servers (docs/ui/web/web-app.md section 4)
@@ -644,7 +761,7 @@ const views = {
         toast("saved", "success");
       });
     };
-    refresh(async () => { t = await api("/api/time"); drawStatus(); }, 1000);
+    live("/api/time", (state) => { t = state; drawStatus(); });
   },
   async logs() {
     render(`<h1>Logs</h1><div class="card"><div class="card-body">
@@ -750,7 +867,7 @@ const views = {
     const recovery = u.app === "recovery";
     render(`<h1>System</h1>` +
       card("Device", facts([
-        ["Firmware", esc(s.device.firmware)], ["Uptime", duration(s.device.uptime_s)],
+        ["Firmware", esc(s.device.firmware)], ["Built", esc(s.device.built)], ["Uptime", duration(s.device.uptime_s)],
         ["Free memory", `${s.device.heap_internal_kb} KB internal, ${s.device.heap_psram_kb} KB PSRAM`],
         ["Firmware update", u.firmware_direct ? "direct" : "through the recovery app"],
       ])) +
@@ -918,7 +1035,8 @@ async function runUpdate(target) {
   const file = $(target === "firmware" ? "#fw-file" : "#fs-file").files[0];
   const url = $(target === "firmware" ? "#fw-url" : "#fs-url").value.trim();
   if (!file && !url) throw new Error("choose an image or enter a URL");
-  clearInterval(refreshTimer);
+  // the device restarts: nothing to follow meanwhile
+  liveStop();
   try {
     let u = await api("/api/update");
     if (target === "firmware" && !u.firmware_direct) {

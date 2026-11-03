@@ -30,12 +30,10 @@ using webserver::detail::read_body;
 using webserver::detail::require_login;
 using webserver::detail::route;
 using webserver::detail::send_error;
-using webserver::detail::send_json;
 
-esp_err_t send_presets(httpd_req_t *req)
+// GET /api/presets, pushed on the live socket as well
+void write_presets(JsonWriter &json)
 {
-    static char buffer[3072]; // the server has one task
-    JsonWriter json(buffer, sizeof(buffer));
     const size_t count = presets::count();
     const size_t current = presets::current();
     json.begin_object().begin_array("presets");
@@ -61,7 +59,11 @@ esp_err_t send_presets(httpd_req_t *req)
         .number("current", current < count ? static_cast<int64_t>(current) : -1)
         .number("max", static_cast<int64_t>(presets::kMaxPresets))
         .end_object();
-    return send_json(req, json);
+}
+
+esp_err_t send_presets(httpd_req_t *req)
+{
+    return webserver::detail::send_state(req, write_presets);
 }
 
 esp_err_t get_presets(httpd_req_t *req)
@@ -148,6 +150,7 @@ esp_err_t post_delete(httpd_req_t *req)
 
 void register_preset_routes(void *server)
 {
+    webserver::detail::add_live_topic("/api/presets", 2000, write_presets);
     const httpd_uri_t routes[] = {
         route("/api/presets", HTTP_GET, get_presets),
         route("/api/presets/save", HTTP_POST, post_save),

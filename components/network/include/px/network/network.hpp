@@ -27,6 +27,8 @@
 //     connection.
 //   * The hotspot of the first setup is open (no screen shows a password). Otherwise it takes the
 //     password generated on the first boot: 8 digits and 2 lowercase letters.
+//   * Modem sleep only while nothing holds the Wi-Fi awake (the LED supply, a web page; hold_awake)
+//     and kModemSleepDelayS after the last activity (wake_activity).
 
 #include <cstddef>
 #include <cstdint>
@@ -88,6 +90,10 @@ struct Status {
     bool hotspot_enabled;
     // the task runs and the saved networks are loaded (before: saved_count says nothing)
     bool ready;
+    // modem sleep is on; the holds (AwakeHold bits) and, with none, the seconds until it sleeps
+    bool modem_sleep;
+    uint8_t awake_holds;
+    uint32_t modem_sleep_in_s;
 };
 
 struct ScanEntry {
@@ -171,11 +177,21 @@ constexpr uint32_t kMaxPauseS = 3600;
 esp_err_t pause(uint32_t seconds);
 esp_err_t set_hotspot(bool on);
 esp_err_t new_hotspot_password();
-// Modem sleep (docs/architecture.md section 9.2): the radio sleeps between the router's beacons,
-// which lowers the idle current, and every packet to the device waits up to a beacon
-// interval (about 100 ms). Off by default; main turns it on while the LEDs are off. May be called
-// before start(), the last value applies.
-void set_power_save(bool on);
+// Modem sleep (WIFI_PS_MIN_MODEM, docs/architecture.md section 9.2): the radio sleeps between the
+// router's beacons, which lowers the idle current, and every packet to the device waits up to a
+// beacon interval (about 100 ms). On only while no hold is on and kModemSleepDelayS have passed
+// since the last activity; a released hold counts as activity. Off from the start; the delay
+// counts from start().
+constexpr uint32_t kModemSleepDelayS = 300;
+enum class AwakeHold : uint8_t {
+    Leds = 1, // the LED supply is on: realtime input and live controls need every packet at once
+    Web = 2,  // a browser tab shows a page of the web UI (the live socket)
+};
+// From any task, also before start() (the LED supply at power on).
+void hold_awake(AwakeHold hold, bool on);
+// From any task, cheap (a web request's every receive): restarts the delay, and wakes the modem
+// at once when it sleeps.
+void wake_activity();
 
 const char *state_name(StaState state);
 

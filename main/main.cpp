@@ -22,6 +22,7 @@
 #include "px/hass/hass.hpp"
 #include "px/network/network.hpp"
 #include "px/platform/device.hpp"
+#include "px/platform/restart.hpp"
 #include "px/platform/storage.hpp"
 #include "px/platform/system_info.hpp"
 #include "px/platform/time_sync.hpp"
@@ -73,7 +74,7 @@ void on_input(px::input::Action action, int steps)
         break;
     case Action::Restart:
         ESP_LOGW(kTag, "restart by the button");
-        esp_restart();
+        px::platform::restart();
         break;
     case Action::Hotspot:
         px::network::open_hotspot();
@@ -140,7 +141,8 @@ void start_hardware(const px::board::Info &board, const px::board::Handles &hand
 }
 
 // The render task (docs/leds.md section 3) on the board's LED pins; the supply and its indicator
-// LED are relays 1 and 2. While the supply is off the Wi-Fi uses modem sleep.
+// LED are relays 1 and 2. While the supply is on the Wi-Fi stays awake (docs/architecture.md
+// section 9.2).
 void start_leds(const px::board::Info &board)
 {
     const px::leds::Start start{
@@ -150,7 +152,7 @@ void start_leds(const px::board::Info &board)
             [](bool on) {
                 px::relay::set(1, on);
                 px::relay::set(2, on);
-                px::network::set_power_save(!on);
+                px::network::hold_awake(px::network::AwakeHold::Leds, on);
             },
         .has_motion = px::motion::running(),
         .set_motion_hold = px::motion::running() ? px::motion::set_hold_s : nullptr,

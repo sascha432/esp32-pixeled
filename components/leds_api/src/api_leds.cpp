@@ -39,6 +39,7 @@
 #include <cstring>
 #include <iterator>
 
+#include "esp_attr.h"
 #include "esp_log.h"
 #include "esp_timer.h"
 #include "freertos/FreeRTOS.h"
@@ -117,7 +118,8 @@ bool form_number(httpd_req_t *req, const char *body, const char *key, long min, 
     return true;
 }
 
-esp_err_t send_state(httpd_req_t *req)
+// GET /api/leds, pushed on the live socket as well
+void write_leds(JsonWriter &json)
 {
     const leds::Status s = leds::status();
     const leds::Config c = leds::config();
@@ -127,8 +129,6 @@ esp_err_t send_state(httpd_req_t *req)
     color_text(s.state.color, color);
     char overlay_color[8];
     color_text(o.color, overlay_color);
-    static char buffer[4096]; // the server has one task
-    JsonWriter json(buffer, sizeof(buffer));
     json.begin_object()
         .boolean("on", s.state.on)
         .number("brightness", s.state.brightness)
@@ -209,7 +209,11 @@ esp_err_t send_state(httpd_req_t *req)
         .boolean("clock_24h", o.clock_24h)
         .end_object()
         .end_object();
-    return send_json(req, json);
+}
+
+esp_err_t send_state(httpd_req_t *req)
+{
+    return webserver::detail::send_state(req, write_leds);
 }
 
 esp_err_t get_leds(httpd_req_t *req)
@@ -341,7 +345,7 @@ esp_err_t get_layout(httpd_req_t *req)
     }
     const leds::Layout layout = leds::layout();
     const leds::Status s = leds::status();
-    static char buffer[2048];
+    static EXT_RAM_BSS_ATTR char buffer[2048]; // the server's task; PSRAM on the S3
     JsonWriter json(buffer, sizeof(buffer));
     json.begin_object()
         .number("width", layout.width)
@@ -412,7 +416,7 @@ esp_err_t post_layout(httpd_req_t *req)
     if (!require_login(req)) {
         return ESP_OK;
     }
-    static char body[1024];
+    static EXT_RAM_BSS_ATTR char body[1024]; // the server's task; PSRAM on the S3
     if (!read_body(req, body, sizeof(body))) {
         return send_error(req, "400 Bad Request", "the request is too large");
     }
@@ -702,7 +706,7 @@ esp_err_t send_lanes(httpd_req_t *req)
 {
     const leds::Lanes lanes = leds::lanes();
     const leds::Status s = leds::status();
-    static char buffer[1536];
+    static EXT_RAM_BSS_ATTR char buffer[1536]; // the server's task; PSRAM on the S3
     JsonWriter json(buffer, sizeof(buffer));
     json.begin_object().begin_array("lanes");
     for (size_t i = 0; i < s.available_lanes; i++) {
@@ -790,6 +794,7 @@ esp_err_t post_lanes(httpd_req_t *req)
 
 void register_routes(void *server, void (*audio)(effects::Audio &out))
 {
+    webserver::detail::add_live_topic("/api/leds", 2000, write_leds);
     g_audio = audio;
     const httpd_uri_t routes[] = {
         route("/api/leds", HTTP_GET, get_leds),

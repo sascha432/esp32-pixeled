@@ -6,6 +6,10 @@ outputs with their DMA ring; phase 6 has the microphone, WARLS and WLED audio sy
 4 has 13 animations, the crossfade, palettes and presets; phase 7 the buttons and the encoder;
 phase 8 the live preview and the overlay ([leds.md](leds.md) section 11).
 
+State 2026-11-02: the web server, the web UI's live socket and the modem sleep rule ported from
+hassctrl, flashed on the test board; `tools/test_web.py` 63 of 63 there, the browser check is
+open (phase 1).
+
 **For the user's eyes (built 2026-10-21, not looked at on the LEDs):** the seven new animations
 (gradient, color fade, twinkle, meteor, ripple, matrix rain, noise) with and without sound, the
 crossfade, the overlay text and clock (3 x 5 digits on the 24 wide matrix), the live preview on
@@ -71,6 +75,18 @@ click of button 4, for example) if it is wanted.
    `encoder_button_gpio` in the variant, build and flash; `input` shows the position. Turning
    changes the brightness (faster when turned fast; the wrong way round: swap A and B), the push
    switches on and off, held 0.6 s the knob changes the animation until it rests for 10 s.
+10. **Modem sleep** (firmware of 2026-11-02, architecture.md section 9.2; keep the matrix below
+    10 W: low brightness, no full white). With the serial log on (`log on`):
+    * LEDs on (`leds bright 10`, `leds on`): the log says `modem sleep off` at once if it slept;
+      `wifi status` shows `modem: awake, held by leds`, also after 5 minutes.
+    * LEDs off (`leds off`): after the fade `wifi status` shows `modem: awake, sleeps in` about
+      300 s, counting down; after 5 minutes the log says `modem sleep on`, `wifi status`
+      `modem: sleeps`. Then `leds on`: `modem sleep off` within a second.
+    * A web page (on the Wi-Fi, LEDs off): the Status page open shows `held by web`; the tab hidden
+      or closed starts the 5 minutes again. While it sleeps, one request (`/api/status`) wakes it
+      at once (`modem sleep off`) and the 5 minutes start again.
+    * Ping the device with the LEDs off and the modem asleep (about 80 ms), then awake (about
+      13 ms).
 
 **2026-10-21, a mistake:** `leds fill 255 255 255` with `leds bench` sent full white to the test
 matrix (bench sent the frame before the console's power limit), far above 10 W; the board browned
@@ -100,8 +116,62 @@ styles take it. Not tried: the factory reset path (it erases the test board's se
   `wifi pause`). Open: the same with the router really off.
 * Modem sleep while the LEDs are off: built 2026-10-23 (architecture.md section 9.2), switched
   with the supply; ping 13 ms on, 80 ms off on the test board; idle current at 5 V from 70 to 80 mA
-  down to 15 to 25 mA (measured by the user). Open: a firmware upload and the web UI with the
-  LEDs off, and realtime input (when built) waking it before its first frame.
+  down to 15 to 25 mA (measured by the user). Changed 2026-11-02 to hassctrl's rule: 5 minutes
+  after the last activity (a web request's bytes, the end of a hold), held awake by the LED supply
+  and by a web page shown on the live socket, so a firmware upload or the web UI with the LEDs off
+  wake it with their first request. Test board (COM7, no Wi-Fi saved, hotspot on): `modem sleep
+  on` 301 s after the start, `wifi status` counts down. Open: the same on the Wi-Fi (a request
+  wakes it at once, a shown page holds it, the LEDs hold it), and realtime input (when built)
+  waking it before its first frame (its packets are no activity yet).
+* Web server and web UI from hassctrl (2026-11-02, architecture.md section 9.4, ui/web/web-app.md
+  section 4.1): the live socket with up to 3 paths per tab (no page polls any more), idle close
+  after 30 s, TCP keep-alive, 24 lwIP sockets with the budget checked at build time, `files.zip`
+  on a task of its own, the captive DNS socket only with the hotspot, console `sockets`, the build
+  time, `platform::restart()` with the RTC watchdog, `build_fs.py --device`. Built for the ESP32,
+  S3, C3 and C6 (main and recovery); flashed on the test board (COM7): boots, `sockets` 4 of 24
+  with the hotspot on, console `restart` restarts. On the Wi-Fi (192.168.0.196): `tools/test_web.py`
+  63 of 63 (idle sessions closed after 30 s, 20 idle connections do not lock out a new client, the
+  live socket's pushes, two paths in one frame, heartbeat, logout closes it, two `files.zip` at
+  once next to the API), internal RAM 138 KB free; the firmware update by `tools/update.py` through
+  the recovery app. Found and fixed on the way: a second `files.zip` got 503 "no memory" (its
+  44 KB entry list at once; it grows with the files now). Open: the pages in a browser (Status,
+  Wi-Fi, Hotspot, MQTT, Time, LEDs: pushes, a hidden tab, the preview closing and opening),
+  `build_fs.py --device` on a device with presets, `test_web.py` against the recovery app.
+* **Task stacks** (2026-11-03, `mem tasks` on the test board, ESP32 without PSRAM, trace facility
+  on for the measurement): `tools/test_web.py` (63 of 63) and every web API, the live socket with
+  the LEDs page's three paths and the preview, two `files.zip` at once, a Wi-Fi scan, a backup
+  export, its check and an import that applies it, a preset saved, shown and deleted, the clock and
+  text overlay, all 14 animations with the microphone on, MQTT connected with every entity set and
+  put back (39 of 39), the web image uploaded with `build_fs.py --device`, a firmware upload into
+  the recovery app, 40 DNS queries with the hotspot on, WARLS and WLED audio sync packets, the
+  console's status commands and `audio watch`. Peak use before (bytes): httpd 3820 of 8192, wifi
+  4336 of 6656, console 2136 of 6144, mqtt 2464 of 6144, network 2372 of 4096, leds 1964 of 4096,
+  mdns 2000 of 4096, audio 1332 of 4096, esp_timer 2404 of 4096 (MQTT's state timer), tcpip 1736
+  of 3584, captive DNS 1776 of 3072, audio_udp 1340 of 3072, sys_evt 1492 of 2816. Sized from it
+  (the peak and at least 1 KB and a quarter): httpd 6144 (both apps), console 4096, mDNS 3072
+  (`CONFIG_MDNS_TASK_STACK_SIZE`), audio 3072, audio_udp 2560; 6.5 KB of internal RAM. The same
+  load again with them: httpd 3816 of 6144, console 2140 of 4096, mdns 1560 of 3072, audio 1160
+  of 3072, audio_udp 1384 of 2560 (the least left, 1176), the others as before; the recovery app
+  took a firmware upload with its 6 KB. Kept: mqtt 6144 (an `mqtts://` broker's TLS handshake runs
+  on it, not measured), esp_timer 4096 (a restart's shutdown handlers run on it), captive DNS 3072,
+  network and leds 4096. The two tasks that end, with a log line of their unused stack for the
+  measurement (removed again): `files.zip` 2.5 KB used of 5 KB (three at once) -> 3.5 KB; the URL
+  download 1.9 KB over HTTP (the file system in the main firmware, the firmware in the recovery
+  app), 3.7 KB over HTTPS (the handshake, the answer refused as no image) of 8 KB -> 6 KB. Not
+  measured: TLS for MQTT, a firmware upload into the
+  main firmware of a 16 MB board (the same handler as the file system upload, plus the image
+  check), the S3, C3 and C6, the console's `leds bench` and `light calibrate`.
+  Open, your decision: the stacks kept at their old size, by the margin rule of architecture.md
+  section 4: network 4096 -> 3584 (2524 used; hassctrl took its network task to 3840 the same
+  day), leds 4096 -> 3328 (2064), tcpip 3584 -> 2816 (1740, `CONFIG_LWIP_TCPIP_TASK_STACK_SIZE`),
+  sys_evt 2816 -> 2560 (1496, `CONFIG_ESP_SYSTEM_EVENT_TASK_STACK_SIZE`); 2.5 KB together.
+* **Static data in PSRAM on the S3** (2026-11-03, as hassctrl): the objects of architecture.md
+  section 11 (21 KB) and mDNS; the linker map has them at 0x3c16xxxx, 37 KB of `.bss` in external
+  RAM in all. Built for the S3 (main and recovery: the recovery app without the option), the
+  ESP32, C3 and C6 (the attribute does nothing there). Not run on the AI-S3 yet (not connected):
+  the boot, Wi-Fi with a saved network (the network task's defaults come from `start()` now), the
+  web test and the backup import, `mem` before and after; hassctrl's check that the recovery app
+  boots with a failing PSRAM applies here too (the option is not in its layers).
 * The pins of the board are compile-time only (architecture.md section 8.1): a hardware page with
   runtime pins (NVS) for LED lanes, power switch, motion, I2C, LDR, buttons.
 * Test board: the WLED controller PCB on COM4 (variant `esp32_devkit.wled_controller_rev1_1`),
@@ -182,7 +252,9 @@ styles take it. Not tried: the factory reset path (it erases the test board's se
 * The supply off in the panic handler: built 2026-10-21; the pin not measured yet.
 * A test pattern per lane ("light the first LED of each lane") on the layout page.
 * The power model and the panel correction per lane (above).
-* The LED settings show up in the web UI only after a reload when changed from the console.
+* The LED settings show up in the web UI only after a reload when changed from the console or
+  Home Assistant: since 2026-11-02 the LEDs page's status, the sound input and the presets follow
+  on the live socket, the controls (switch, sliders, animation) still show what the page sent.
 
 ## Phase 5: Home Assistant (built 2026-10-19, works with the user's HA 2026.10)
 
@@ -196,6 +268,12 @@ styles take it. Not tried: the factory reset path (it erases the test board's se
 * More entities: built 2026-10-21: attack, release, overlay, overlay text, power on; palette,
   preset, transition, crossfade, dithering (announced and tried over MQTT); not yet seen in Home
   Assistant. Open: playlist, intensity.
+* MQTT test 2026-11-03 (test board, Mosquitto at 192.168.0.4, anonymous): 20 entities announced;
+  speed, rotation, reactive, strength, attack, release, palette, transition, crossfade, dithering,
+  overlay, overlay text, power on, auto off and its minutes, the light (effect, color, brightness,
+  off and on with a transition) and a preset each set over MQTT, the state followed, every value
+  put back (39 of 39). The preset select is announced with the first preset. Not tried: the
+  restart button, `mqtts://`.
 
 ## Phase 6: audio (microphone built 2026-10-21)
 

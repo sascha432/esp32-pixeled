@@ -1,6 +1,6 @@
 // The LED pages of the web UI (docs/ui/web/web-app.md section 4): control and settings, and the
 // layout with its preview. Loaded by app.js on the first visit of one of them; uses its helpers
-// (api, render, card, facts, esc, busy, toast, refresh).
+// (api, render, card, facts, esc, busy, toast, live).
 "use strict";
 
 window.pxLeds = (() => {
@@ -22,9 +22,9 @@ window.pxLeds = (() => {
     const effectOf = (slug) => s.effects.find((e) => e.slug === slug) || {};
     // an animation that needs sound only with a source (the current one stays listed)
     const listed = (e) => e.reactive !== "required" || s.audio.source || e.slug === s.effect;
-    // the sound comes with the live socket; the card is drawn further down
+    // the sound comes with the preview's socket; the card is drawn further down
     let mic = null;
-    const live = preview((frame) => mic?.live(frame));
+    preview((frame) => mic?.live(frame));
 
     $("#leds-control").innerHTML = card("Light", `
       <div class="form-check form-switch mb-3">
@@ -225,25 +225,23 @@ window.pxLeds = (() => {
     // the sound input: the microphone's settings, the UDP inputs and a live readout
     mic = await soundInput();
 
-    // every 2 s the LED status and the sound's slower facts (the bands come with the live socket);
-    // the live preview stops with the page (the refresh runs no more)
-    let tick = 0;
-    refresh(async () => {
-      live.alive();
-      if (tick++ % 4 !== 0) return;
-      if (mic) await mic.update();
-      s = await api("/api/leds");
-      await presets.update();
+    // The LED status, the sound's slower facts and the preset the light matches follow on the live
+    // socket (checked every 2 s, sent when they changed; the bands come with the preview's socket).
+    // The controls are not drawn over: they show what this page sent.
+    live("/api/leds", (state) => {
+      s = state;
       const box = $("#leds-status");
       if (box) box.innerHTML = statusFacts();
       const motion = $("#motion-status");
       if (motion) motion.innerHTML = motionFacts();
-    }, 500);
+    });
+    if (mic) live("/api/audio", (state) => mic.update(state));
+    live("/api/presets", (state) => presets.update(state));
   }
 
   // The card "Sound input": the analysis as it runs (32 bars, the levels), the microphone's settings
-  // (with one) and the UDP inputs. Returns { update } for the page's refresh (every 2 s) and
-  // { live } for the frames of the live socket (20 a second), null without the API.
+  // (with one) and the UDP inputs. Returns { update } for the state of the live socket (every 2 s)
+  // and { live } for the frames of the preview's socket (20 a second), null without the API.
   async function soundInput() {
     let a;
     try {
@@ -343,13 +341,14 @@ window.pxLeds = (() => {
     };
     drawBars();
     drawFacts();
-    // without frames from the socket (more than 4 open) the poll draws the bars as well
+    // without frames from the preview (more than 4 open) the state of the live socket draws the
+    // bars as well
     let heard = 0;
     return {
-      update: async () => {
-        const live = Date.now() - heard < 1000 ? { active: a.active, beat: a.beat, loudness: a.loudness, bands: a.bands } : null;
-        a = { ...(await api("/api/audio")), ...live };
-        if (!live) drawBars();
+      update: async (state) => {
+        const recent = Date.now() - heard < 1000 ? { active: a.active, beat: a.beat, loudness: a.loudness, bands: a.bands } : null;
+        a = { ...(state ?? await api("/api/audio")), ...recent };
+        if (!recent) drawBars();
         drawFacts();
       },
       live: (frame) => {
@@ -408,11 +407,13 @@ window.pxLeds = (() => {
       };
     };
     draw();
+    // `state`: the live socket's (a preset saved in another tab as well), else asked for (after a
+    // change of the light)
     return {
-      update: async () => {
-        const before = p.current;
-        p = await api("/api/presets");
-        if (p.current !== before && !$("#leds-presets").contains(document.activeElement)) draw();
+      update: async (state) => {
+        const before = JSON.stringify(p);
+        p = state ?? await api("/api/presets");
+        if (JSON.stringify(p) !== before && !$("#leds-presets").contains(document.activeElement)) draw();
       },
     };
   }
@@ -500,14 +501,15 @@ window.pxLeds = (() => {
   }
 
   // The card "Live": the canvas as drawn, over a WebSocket (GET /api/leds/live), and the sound for
-  // `onAudio`. Shown while the page is open: alive() comes with every refresh; without it for 3 s
-  // (another page) the socket closes.
+  // `onAudio`. The socket closes within 3 s when the page is left (its canvas is gone) or the tab is
+  // hidden, and opens again when the tab shows the page.
   function preview(onAudio) {
     $("#leds-live").innerHTML = card("Live", `
       <div><canvas id="live-canvas" class="border rounded" style="max-width:100%;image-rendering:pixelated"></canvas></div>
       <div id="live-state" class="small text-body-secondary mt-1">connecting ...</div>`);
+    // this page's: a new visit of the page has its own
+    const canvas = $("#live-canvas"), stateLine = $("#live-state");
     let socket = null;
-    let seen = Date.now();
     const open = () => {
       socket = new WebSocket(`${location.protocol === "https:" ? "wss" : "ws"}://${location.host}/api/leds/live`);
       socket.binaryType = "arraybuffer";
@@ -523,14 +525,12 @@ window.pxLeds = (() => {
         }
       };
       socket.onclose = () => {
-        const state = $("#live-state");
-        if (state) state.textContent = "no preview (more than 4 open, or the connection closed)";
+        stateLine.textContent = document.hidden ? "paused" : "no preview (more than 4 open, or the connection closed)";
         socket = null;
       };
     };
     const draw = (data, width, height) => {
-      const canvas = $("#live-canvas");
-      if (!canvas) { socket?.close(); return; }
+      if (!canvas.isConnected) { socket?.close(); return; }
       const cell = Math.max(2, Math.min(16, Math.floor((canvas.parentElement.clientWidth - 2) / Math.max(1, width))));
       if (canvas.width !== width * cell || canvas.height !== height * cell) {
         canvas.width = width * cell;
@@ -547,16 +547,19 @@ window.pxLeds = (() => {
           }
         }
       }
-      $("#live-state").textContent = `${width} x ${height}, as drawn (before the brightness)`;
+      stateLine.textContent = `${width} x ${height}, as drawn (before the brightness)`;
     };
     open();
     const watchdog = setInterval(() => {
-      if (Date.now() - seen > 3000 || !$("#live-canvas")) {
+      if (!canvas.isConnected) {
         clearInterval(watchdog);
         socket?.close();
+      } else if (document.hidden) {
+        socket?.close();
+      } else if (!socket) {
+        open();
       }
-    }, 1000);
-    return { alive: () => { seen = Date.now(); if (!socket && $("#live-canvas")) open(); } };
+    }, 3000);
   }
 
   // ---------------------------------------------------------------------------- the layout page

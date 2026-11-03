@@ -171,11 +171,33 @@ esp_err_t set_hotspot(bool on)
     return command(MsgType::Hotspot, 0, on ? 1 : 0);
 }
 
-void set_power_save(bool on)
+void hold_awake(AwakeHold hold, bool on)
 {
-    // before start() the task applies the value when it starts the driver
-    if (g_power_save.exchange(on) != on && g_queue != nullptr) {
-        command(MsgType::PowerSave);
+    const auto bit = static_cast<uint8_t>(hold);
+    if (on) {
+        g_awake_holds.fetch_or(bit);
+    } else if ((g_awake_holds.fetch_and(static_cast<uint8_t>(~bit)) & bit) != 0) {
+        // the delay counts from the end of the hold
+        g_activity_at.store(xTaskGetTickCount());
+    }
+    // the task applies it within a second anyway; the message makes it at once
+    if (g_queue != nullptr) {
+        Msg msg{};
+        msg.type = MsgType::Hold;
+        xQueueSend(g_queue, &msg, 0);
+    }
+}
+
+void wake_activity()
+{
+    g_activity_at.store(xTaskGetTickCount());
+    // only a sleeping modem needs the task at once; one message is enough until it woke
+    if (g_modem_sleep.load() && !g_wake_posted.exchange(true) && g_queue != nullptr) {
+        Msg msg{};
+        msg.type = MsgType::Activity;
+        if (xQueueSend(g_queue, &msg, 0) != pdTRUE) {
+            g_wake_posted.store(false);
+        }
     }
 }
 

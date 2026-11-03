@@ -32,18 +32,15 @@ namespace {
 
 namespace net = px::network;
 
-esp_err_t get_wifi(httpd_req_t *req)
+// GET /api/wifi, pushed on the live socket as well
+void write_wifi(JsonWriter &json)
 {
-    if (!require_login(req)) {
-        return ESP_OK;
-    }
-    static char buffer[2560];
+    // scratch of the web server's task, too large for its stack
     static net::SavedNetworkInfo saved[net::kMaxNetworks];
     static net::ScanEntry scan[20];
     const size_t saved_count = net::saved_networks(saved, net::kMaxNetworks);
     const size_t scan_count = net::last_scan(scan, 20);
 
-    JsonWriter json(buffer, sizeof(buffer));
     json.begin_object();
     json.begin_array("saved");
     for (size_t i = 0; i < saved_count; i++) {
@@ -66,7 +63,14 @@ esp_err_t get_wifi(httpd_req_t *req)
     json.end_array();
     json.string("policy", net::status().policy == net::Policy::StrongestSignal ? "strongest" : "order");
     json.end_object();
-    return send_json(req, json);
+}
+
+esp_err_t get_wifi(httpd_req_t *req)
+{
+    if (!require_login(req)) {
+        return ESP_OK;
+    }
+    return send_state(req, write_wifi);
 }
 
 esp_err_t send_ok(httpd_req_t *req)
@@ -144,14 +148,10 @@ esp_err_t post_reconnect(httpd_req_t *req)
     return send_ok(req);
 }
 
-esp_err_t get_hotspot(httpd_req_t *req)
+// GET /api/hotspot, pushed on the live socket as well
+void write_hotspot(JsonWriter &json)
 {
-    if (!require_login(req)) {
-        return ESP_OK;
-    }
     const net::Status s = net::status();
-    char buffer[192];
-    JsonWriter json(buffer, sizeof(buffer));
     json.begin_object()
         .boolean("on", s.hotspot_on)
         .boolean("kept_on", s.hotspot_enabled)
@@ -161,7 +161,14 @@ esp_err_t get_hotspot(httpd_req_t *req)
         .number("clients", s.hotspot_clients)
         .number("off_in_s", s.hotspot_off_in_s)
         .end_object();
-    return send_json(req, json);
+}
+
+esp_err_t get_hotspot(httpd_req_t *req)
+{
+    if (!require_login(req)) {
+        return ESP_OK;
+    }
+    return send_state(req, write_hotspot);
 }
 
 esp_err_t post_hotspot(httpd_req_t *req)
@@ -229,6 +236,8 @@ esp_err_t post_add(httpd_req_t *req)
 
 void register_wifi_routes(httpd_handle_t server)
 {
+    add_live_topic("/api/wifi", 1000, write_wifi);
+    add_live_topic("/api/hotspot", 1000, write_hotspot);
     const httpd_uri_t routes[] = {
         route("/api/wifi", HTTP_GET, get_wifi),
         route("/api/wifi/scan", HTTP_POST, post_scan),
