@@ -7,6 +7,14 @@ and what is gone under Removed. Updated in the same commit as the change ([CLAUD
 
 ## Unreleased (0.1.0)
 
+### 2026-11-04
+
+Fixed
+
+* ESP32-S3: the recovery app starts again when the PSRAM fails. mbedTLS allocated from PSRAM there
+  too (the board's layer) and its first allocation aborted the boot, in a loop; it allocates from
+  PSRAM in the main firmware only now (`sdkconfig.main.esp32s3`).
+
 ### 2026-11-03
 
 Changed

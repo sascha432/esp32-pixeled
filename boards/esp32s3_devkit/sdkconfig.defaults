@@ -11,6 +11,5 @@ CONFIG_SPIRAM=y
 CONFIG_SPIRAM_MODE_OCT=y
 CONFIG_SPIRAM_SPEED_80M=y
 
-# TLS (update downloads, MQTT over TLS) allocates from PSRAM: one connection costs about 40 KB
-# CONFIG_MBEDTLS_INTERNAL_MEM_ALLOC is not set
-CONFIG_MBEDTLS_EXTERNAL_MEM_ALLOC=y
+# mbedTLS allocates from PSRAM in the main firmware only (sdkconfig.main.esp32s3): in the recovery
+# app it stays internal, so that app starts when the PSRAM fails

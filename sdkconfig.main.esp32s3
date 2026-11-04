@@ -10,3 +10,9 @@ CONFIG_SPIRAM_ALLOW_BSS_SEG_EXTERNAL_MEMORY=y
 # and then and never writes the flash, so it runs with the stack outside the internal RAM.
 CONFIG_MDNS_MEMORY_ALLOC_SPIRAM=y
 CONFIG_MDNS_TASK_CREATE_FROM_SPIRAM=y
+
+# TLS (update downloads, MQTT over TLS) allocates from PSRAM: one connection costs about 40 KB. Not
+# in the recovery app: without PSRAM its first allocation fails and mbedTLS's PSA init aborts the
+# boot (AI-S3 with the PSRAM driven wrongly, 2026-11-04).
+# CONFIG_MBEDTLS_INTERNAL_MEM_ALLOC is not set
+CONFIG_MBEDTLS_EXTERNAL_MEM_ALLOC=y

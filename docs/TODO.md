@@ -175,10 +175,18 @@ styles take it. Not tried: the factory reset path (it erases the test board's se
 * **Static data in PSRAM on the S3** (2026-11-03, as hassctrl): the objects of architecture.md
   section 11 (21 KB) and mDNS; the linker map has them at 0x3c16xxxx, 37 KB of `.bss` in external
   RAM in all. Built for the S3 (main and recovery: the recovery app without the option), the
-  ESP32, C3 and C6 (the attribute does nothing there). Not run on the AI-S3 yet (not connected):
-  the boot, Wi-Fi with a saved network (the network task's defaults come from `start()` now), the
-  web test and the backup import, `mem` before and after; hassctrl's check that the recovery app
-  boots with a failing PSRAM applies here too (the option is not in its layers).
+  ESP32, C3 and C6 (the attribute does nothing there). AI-S3 (COM8, 2026-11-04), `mem` after
+  the Wi-Fi connected: old firmware 106 KB internal free (largest block 32 KB); this firmware
+  without the PSRAM layer 119 KB (44 KB, the smaller stacks), with it 159 KB (84 KB), PSRAM 39 KB
+  less. It joins its saved network with a scan (the network task's defaults from `start()`),
+  `test_web.py` 66 of 66, `build_fs.py --device`, a firmware upload straight into the main
+  firmware (16 MB) in 12 s. The recovery app with the PSRAM driven in quad mode (fails for real)
+  aborted the boot in a loop: not the PSRAM `.bss` (off there) but mbedTLS's PSA init, whose
+  allocation from PSRAM the S3's board layer set for both apps. Fixed: that setting is in
+  `sdkconfig.main.esp32s3` now; the recovery app then boots without PSRAM ("continuing without
+  it", 319 KB internal), Wi-Fi and its web page answer. Seen once, not again: right after a
+  recovery app and a main firmware were flashed in a row the S3 ran the recovery app (no rollback
+  recorded); the second flash booted the main firmware. Not checked: the backup import on the S3.
 * The pins of the board are compile-time only (architecture.md section 8.1): a hardware page with
   runtime pins (NVS) for LED lanes, power switch, motion, I2C, LDR, buttons.
 * Test board: the WLED controller PCB on COM4 (variant `esp32_devkit.wled_controller_rev1_1`),

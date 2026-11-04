@@ -497,7 +497,8 @@ esp32-pixeled/
   section is zeroed at start, never loaded from the image: an object there starts as zeros. The
   network task's `t` has non-zero defaults, so `network::start()` constructs it in place first; the
   live socket's clients are assigned in full before a slot is read. mDNS keeps its data and its
-  task stack in PSRAM on the S3 (`sdkconfig.main.esp32s3`). The render task's state and the sound
+  task stack in PSRAM on the S3, and mbedTLS allocates from it there (`sdkconfig.main.esp32s3`;
+  in the recovery app both stay internal: without PSRAM mbedTLS's first allocation aborted the boot). The render task's state and the sound
   analysis stay internal (every frame). The console command `mem` shows what is free. `mem tasks` lists every task's stack, its peak use and where it
   lives; it needs `CONFIG_FREERTOS_USE_TRACE_FACILITY=y` (off in the builds: set it in a variant's
   `sdkconfig.defaults` or with menuconfig for a measurement).

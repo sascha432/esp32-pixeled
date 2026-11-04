@@ -401,7 +401,7 @@ and file system uploads stay on the server's task (a flash write stops the cache
 
 * There is no HTTPS web server. The web UI is plain HTTP only.
 * TLS stays in use as a client: the update download by URL, later MQTT over TLS. On the S3 mbedTLS
-  allocates from PSRAM (`CONFIG_MBEDTLS_EXTERNAL_MEM_ALLOC` in the board's defaults); the boards
+  allocates from PSRAM (`CONFIG_MBEDTLS_EXTERNAL_MEM_ALLOC` in `sdkconfig.main.esp32s3`); the boards
   without PSRAM and the recovery app keep it in internal RAM.
 
 ## 7. Open points
