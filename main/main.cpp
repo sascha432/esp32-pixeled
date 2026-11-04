@@ -234,10 +234,13 @@ extern "C" void app_main()
                                           // the API answers without buttons too (none listed)
                                           px::input::register_routes(server);
                                       },
-                                  // the menu's pages (the Sound page also for the UDP inputs alone)
+                                  // the menu's pages; the recovery app has none of them (the Sound
+                                  // page also for the UDP inputs alone)
                                   .features = px::audio::running()
-                                                  ? (px::input::running() ? "leds audio buttons" : "leds audio")
-                                                  : (px::input::running() ? "leds buttons" : "leds")}) != ESP_OK) {
+                                                  ? (px::input::running() ? "leds mqtt time audio buttons"
+                                                                          : "leds mqtt time audio")
+                                                  : (px::input::running() ? "leds mqtt time buttons"
+                                                                          : "leds mqtt time")}) != ESP_OK) {
             ESP_LOGE(kTag, "web server did not start");
         }
         const px::hass::Device device{.name = px::platform::device_name(),

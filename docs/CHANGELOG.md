@@ -19,12 +19,14 @@ Changed
   Hardware, Network, Device) apart by a line, the appearance and log out at its bottom; on a
   phone a tab bar at the bottom (Control, Sound, Layout, Wi-Fi, More), More opens every page as
   a sheet. The Wi-Fi entry carries the connection's state as a dot. Sound and Buttons only show
-  on a board that has them, the recovery app shows Network and Device only. "Log out everywhere"
+  on a board that has them; the recovery app leaves out the LED pages, MQTT and Time and starts
+  on Status. "Log out everywhere"
   moved to the System page (card "Password").
 
 Added
 
-* `/api/status` lists the device's `features` (`leds`, `audio`, `buttons`) for the menu.
+* `/api/status` lists the device's `features` (`leds`, `mqtt`, `time`, `audio`, `buttons`) for
+  the menu.
 * `GET /api/leds/live?audio`: the preview's socket with the sound alone (38 bytes, 20 a second),
   for the bars of the Sound page; the canvas is not copied for it.
 

@@ -219,8 +219,8 @@ const menuGroups = [
   ["Light", [["leds", "Control", "Control", "leds"], ["sound", "Sound", "Sound", "audio"]]],
   ["Hardware", [["led-settings", "LED settings", "Settings", "leds"], ["layout", "Layout", "Layout", "leds"],
     ["buttons", "Buttons", "Buttons", "buttons"]]],
-  ["Network", [["wifi", "Wi-Fi", "Wi-Fi"], ["hotspot", "Hotspot", "Hotspot"], ["mqtt", "MQTT", "MQTT"]]],
-  ["Device", [["status", "Status", "Status"], ["time", "Time", "Time"], ["logs", "Logs", "Logs"], ["system", "System", "System"]]],
+  ["Network", [["wifi", "Wi-Fi", "Wi-Fi"], ["hotspot", "Hotspot", "Hotspot"], ["mqtt", "MQTT", "MQTT", "mqtt"]]],
+  ["Device", [["status", "Status", "Status"], ["time", "Time", "Time", "time"], ["logs", "Logs", "Logs"], ["system", "System", "System"]]],
 ];
 const tabPages = ["leds", "sound", "layout", "wifi"];
 
@@ -493,7 +493,11 @@ function loadScriptNow(src) {
 // The LED pages are in leds.js, loaded with the first visit (the setup on a phone stays small).
 async function ledPage(view, title) {
   await loadScript("leds.js");
-  if ((await api("/api/update")).app === "recovery") return notInRecovery(title);
+  if ((await api("/api/update")).app === "recovery") {
+    // the first page (and the device name's link) is Control: the recovery app starts on Status
+    if (view === "leds") return location.replace("#/status");
+    return notInRecovery(title);
+  }
   await window.pxLeds[view]();
 }
 

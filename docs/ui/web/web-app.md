@@ -214,7 +214,8 @@ input; the 4 viewers are shared).
 `hold`; `encoder` with its pins `a`, `b`, `button`, `position`, `knob` (`brightness`,
 `animations`), `pressed` and the three actions, or null; `actions` with `slug` and `name`),
 `POST /api/input` (`button`: `1` to `4` or `encoder`, and any of `click`, `double`, `hold`).
-The recovery app has none of them (404); its LED pages say so.
+The recovery app has none of them (404): its menu leaves the LED pages out, Control forwards to
+Status, and the others opened by their address say so.
 
 **MQTT.** The card "Connection" (state, the problem in words, connected for, the topics in use;
 live, checked every 2 s) and the form "Broker": Connect (a switch), the address (`mqtt://host:1883`
@@ -223,6 +224,7 @@ it, "Forget the password" removes it), the discovery prefix (`homeassistant`) an
 (empty: `pixeled/<device name>`); Save and connect. Code: `components/hass` (`api.cpp`). API:
 `GET /api/mqtt`, `POST /api/mqtt` (`enabled`, `uri`, `username`, `password`, `forget_password`,
 `prefix`, `base`). Backup section `mqtt` without the password (a comment says where it may go).
+Not in the recovery app (404): its menu leaves MQTT out.
 
 **Time.** The card "Clock" (the local time or "not set", the time zone with the POSIX rule it
 stands for, how long ago a server last answered; live, checked every second) and the form "Settings":
@@ -243,7 +245,7 @@ name or a rule,
 `defaults`), `POST /api/time` (any of `zone`, an IANA name or a rule, empty for UTC, `server1`,
 `server2`; a zone that is neither a known name nor a rule, or a bad server name, is a 400 and
 nothing changes), `GET /api/time/zones` (the names, sorted). Backup section `time` (`zone`, a name
-or a rule, `server_1`, `server_2`). Not in the recovery app (404); its Time page says so.
+or a rule, `server_1`, `server_2`). Not in the recovery app (404): its menu leaves Time out, the page opened by its address says so.
 
 **Layout.** Two columns on a wide screen: the form and the preview. The form has the canvas width
 and height and one box per panel: lane (the board's lanes), X, Y, width, height, the first LED (a

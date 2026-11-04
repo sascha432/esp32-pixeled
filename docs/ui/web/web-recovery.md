@@ -22,7 +22,9 @@ system has happened on earlier devices, mostly with the files still readable. So
   inside), `POST /api/fs/format` with `confirm=yes` erases the file system. Both need the login.
   The settings backup is in NVS and is exported by the web UI's System page, not here.
 * **In the recovery app**: the same rules, `/` serves the web UI from LittleFS when
-  it is there. The LED pages (when built) say "not in the recovery app", the System page has no
+  it is there. The menu leaves out the LED pages, MQTT and Time (no `features`, web-design.md section 3) and
+  the app starts on Status; such a page opened by its address says "not in the recovery app". The
+  System page has no
   Backup card; Status, Wi-Fi, Hotspot, Logs, update, files, format, restart and
   factory reset work. "Start the firmware" is on the built-in page (`/recovery`) and on the System page (Restart and reset) when a firmware is in flash.
 * **No automatic format**: a LittleFS that fails to mount starts the recovery mode

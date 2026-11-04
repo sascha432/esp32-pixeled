@@ -7,7 +7,10 @@ outputs with their DMA ring; phase 6 has the microphone, WARLS and WLED audio sy
 phase 8 the live preview and the overlay ([leds.md](leds.md) section 11).
 
 State 2026-11-03: the LEDs page split into Control, Sound, LED settings and Buttons, the menu as an
-icon rail and a phone tab bar, `features` in `/api/status`, the sound-only preview socket; flashed on the test board.
+icon rail and a phone tab bar, `features` in `/api/status`, the sound-only preview socket; main,
+recovery app and web image flashed on the test board, the recovery app's menu (Wi-Fi, Hotspot,
+Status, Logs, System; starts on Status) looked at by the user. Open: `tools/test_web.py` against
+the new pages (needs the login), light mode.
 
 State 2026-11-02: the web server, the web UI's live socket and the modem sleep rule ported from
 hassctrl, flashed on the test board; `tools/test_web.py` 63 of 63 there, the browser check is

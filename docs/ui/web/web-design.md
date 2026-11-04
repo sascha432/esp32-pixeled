@@ -111,8 +111,9 @@ The menu is one list of entries (`menuGroups` in `app.js`), drawn two ways by `a
   for an error, the problem in the title (tooltip). Refreshed with every page.
 * During the setup the header shows the step (`1 / 3`) instead of the icons and the menu.
 * A page that a device does not have is hidden in the menu, and a group with no page left:
-  `/api/status` lists the device's `features` (`leds`, `audio`, `buttons`; set by main through
-  `webserver::Config::features`, none in the recovery app, which shows Network and Device only).
+  `/api/status` lists the device's `features` (`leds`, `mqtt`, `time`, `audio`, `buttons`; set by
+  main through `webserver::Config::features`). The recovery app has none: it shows Wi-Fi, Hotspot,
+  Status, Logs and System, and starts on Status (Control, the first page, forwards there).
   The entries of a feature start hidden and show with the first `/api/status`, so the menu does
   not flicker; a firmware without the list shows them all.
 
