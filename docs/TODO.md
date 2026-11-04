@@ -6,6 +6,9 @@ outputs with their DMA ring; phase 6 has the microphone, WARLS and WLED audio sy
 4 has 13 animations, the crossfade, palettes and presets; phase 7 the buttons and the encoder;
 phase 8 the live preview and the overlay ([leds.md](leds.md) section 11).
 
+State 2026-11-03: the LEDs page split into Control, Sound, LED settings and Buttons, the menu as an
+icon rail and a phone tab bar, `features` in `/api/status`, the sound-only preview socket; flashed on the test board.
+
 State 2026-11-02: the web server, the web UI's live socket and the modem sleep rule ported from
 hassctrl, flashed on the test board; `tools/test_web.py` 63 of 63 there, the browser check is
 open (phase 1).
@@ -13,7 +16,7 @@ open (phase 1).
 **For the user's eyes (built 2026-10-21, not looked at on the LEDs):** the seven new animations
 (gradient, color fade, twinkle, meteor, ripple, matrix rain, noise) with and without sound, the
 crossfade, the overlay text and clock (3 x 5 digits on the 24 wide matrix), the live preview on
-the LEDs page (fixed for ESP-IDF 6.1's handshake, with the sound bars at 20 fps; tried on the test
+Control (fixed for ESP-IDF 6.1's handshake, with the sound bars at 20 fps; tried on the test
 matrix 2026-10-21), attack and release, the I2S ring's picture (its timing is measured), the supply
 pin in the panic handler (`crash yes` with the LEDs on, below 10 W).
 
@@ -49,12 +52,12 @@ click of button 4, for example) if it is wanted.
    darker or brighter (`leds` shows the brightness). BTN3: off, then on again (with the fade).
 3. **Holds.** BTN1 and BTN2 held: the brightness moves every 0.1 s until let go; BTN2 while the
    LEDs are off switches them on. The power limit (10 W) stays in force at full brightness. BTN3
-   held 0.6 s: the next preset (save one or two on the LEDs page first).
+   held 0.6 s: the next preset (save one or two on Control first).
 4. **Hotspot.** Hold BTN3, press and let go of BTN0 (reset), keep BTN3 down for 2 s more: the boot
    log says "button 4 held at boot: the hotspot opens", and a phone sees `pixeled-4271` without a
    password. Let go: no click comes from that press (the LEDs stay as they are). The Hotspot page
    shows "turns off in" about 15 minutes. Also: power the board up with BTN3 held.
-5. **Web cards** (LEDs page, needs the login): the palette select (shown for rainbow, plasma, fire,
+5. **Web cards** (Control, needs the login): the palette select (shown for rainbow, plasma, fire,
    color fade, ripple, spectrum, noise; "Shades of the color" shows the color picker), the card
    Presets (save, show, delete; "shown" on the matching one), the card Buttons (buttons 2 to 4,
    its hint names button 4 for the hotspot; change an action, it holds after a restart; "restart"
@@ -139,7 +142,7 @@ styles take it. Not tried: the factory reset path (it erases the test board's se
   `build_fs.py --device` on a device with presets, `test_web.py` against the recovery app.
 * **Task stacks** (2026-11-03, `mem tasks` on the test board, ESP32 without PSRAM, trace facility
   on for the measurement): `tools/test_web.py` (63 of 63) and every web API, the live socket with
-  the LEDs page's three paths and the preview, two `files.zip` at once, a Wi-Fi scan, a backup
+  the LEDs page's three paths (now Control's two) and the preview, two `files.zip` at once, a Wi-Fi scan, a backup
   export, its check and an import that applies it, a preset saved, shown and deleted, the clock and
   text overlay, all 14 animations with the microphone on, MQTT connected with every entity set and
   put back (39 of 39), the web image uploaded with `build_fs.py --device`, a firmware upload into
@@ -254,7 +257,7 @@ styles take it. Not tried: the factory reset path (it erases the test board's se
 * A test pattern per lane ("light the first LED of each lane") on the layout page.
 * The power model and the panel correction per lane (above).
 * The LED settings show up in the web UI only after a reload when changed from the console or
-  Home Assistant: since 2026-11-02 the LEDs page's status, the sound input and the presets follow
+  Home Assistant: since 2026-11-02 the LED pages' status, the sound input and the presets follow
   on the live socket, the controls (switch, sliders, animation) still show what the page sent.
 
 ## Phase 5: Home Assistant (built 2026-10-19, works with the user's HA 2026.10)

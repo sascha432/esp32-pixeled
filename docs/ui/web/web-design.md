@@ -52,11 +52,12 @@ changing a page. The pages themselves are in [web-app.md](web-app.md), the recov
 * **Custom themes** (not built): one small CSS file that overrides Bootstrap's CSS
   variables, uploaded like the other web files.
 * Fonts: Bootstrap's system font stack, no web fonts.
-* Icons: small inline SVGs in `app.js` for the header (Wi-Fi, menu, lock).
+* Icons: small inline SVGs in `app.js`: the header (Wi-Fi, lock) and the menu (`navIcons`, 24 x 24
+  strokes in the text's color, one per page).
 
 ## 3. Page frame
 
-A header with the device name, the state icons and the menu button, then the page title and cards.
+A header with the device name and the state icons, the menu, then the page title and cards.
 
 ```
 +--------------------------------------------+
@@ -73,36 +74,55 @@ A header with the device name, the state icons and the menu button, then the pag
 +--------------------------------------------+
 ```
 
-The menu opens over the page on phones. On screens of 800 px and wider it is a sidebar instead
-(`app.css`). It also holds the light, dark or automatic mode and the log out buttons.
+The menu is one list of entries (`menuGroups` in `app.js`), drawn two ways by `app.css`:
+
+* **From 800 px a rail** of 76 px at the left: per page an icon with a short name ("Settings" for
+  LED settings), the four groups apart by a line, and at the bottom the appearance (one button
+  that goes Auto, Light, Dark) and Log out.
+* **On a phone a tab bar** at the bottom: Control, Sound, Layout, Wi-Fi and More. More opens the
+  same list as a sheet over the page, with the group headings and the full names; choosing a page
+  closes it. More is the active tab on a page without a tab of its own. The page ends above the
+  bar, and toasts sit above it.
 
 ```
-+--------------------------------------------+
-| pixeled-1a2b            [Wi-Fi]  [x] |
-+--------------------------------------------+
-|  Status                                    |
-|  Wi-Fi                                     |
-|  Hotspot                                   |
-|  Logs                                      |
-|  System                                    |
-+--------------------------------------------+
-|  Light / dark / auto                       |
-|  Log out                                   |
-|  Log out everywhere                        |
-+--------------------------------------------+
+ 800 px and wider                           phone
++------+-----------------------------+      +--------------------------+
+| (*)  | Status                      |      | pixeled-1a2b      [Wi-Fi]|
+|Control                             |      +--------------------------+
+| |||  |  +-----------------------+  |      | LIGHT                    |
+| Sound|  | card                  |  |      |  (*) Control             |
+|------|  +-----------------------+  |      |  |||  Sound              |
+| [=]  |                             |      | HARDWARE                 |
+|Settings                            |      |  [=] LED settings  ...   |
+|  ..  |                             |      | ...  (More's sheet)      |
+|------|                             |      +--------------------------+
+| Wi-Fi.|                            |      | (*)  |||  [#]  Wi-Fi. ...|
+|  ..  |                             |      |Control Sound Layout  More|
+|------|                             |      +--------------------------+
+| Auto |                             |
+|Log out                             |
++------+-----------------------------+
 ```
 
+* The Wi-Fi entry (rail, sheet and tab) carries the connection's state as a dot: green connected,
+  yellow connecting or waiting, red an error; the header's Wi-Fi icon says the same with the
+  network in its title.
 * The state icon: Wi-Fi (later MQTT too), green when connected, yellow while connecting or waiting, red
   for an error, the problem in the title (tooltip). Refreshed with every page.
 * During the setup the header shows the step (`1 / 3`) instead of the icons and the menu.
-* A page that a device does not have (later: audio without a source) is hidden in the menu,
-  decided by `/api/status`.
+* A page that a device does not have is hidden in the menu, and a group with no page left:
+  `/api/status` lists the device's `features` (`leds`, `audio`, `buttons`; set by main through
+  `webserver::Config::features`, none in the recovery app, which shows Network and Device only).
+  The entries of a feature start hidden and show with the first `/api/status`, so the menu does
+  not flicker; a firmware without the list shows them all.
 
 ## 4. How a page is built
 
 `web/app.js` is one page; the views follow the hash (`#/wifi`). A new page is:
 
-1. an entry in `menuPages` (route name, menu text);
+1. an entry in its group of `menuGroups` (route name, menu text, the rail's short text, the
+   feature it needs if any) and its icon in `navIcons`; a page for the phone's tab bar also in
+   `tabPages` (four at most, More is the fifth);
 2. a function in `views` that calls `render()` with the title and a placeholder, loads its data
    with `api()` and fills it in.
 
@@ -120,6 +140,7 @@ Helpers of `app.js`:
 | `esc(value)` | escapes a text for HTML |
 | `go(name)` | goes to a page |
 | `loadScript(src)` | loads a script once, for pages that the setup does not need (`leds.js`) |
+| `ledPage(view, title)` | a page of `leds.js`: loads it, says "not in the recovery app" there, calls `pxLeds[view]` |
 
 Patterns:
 

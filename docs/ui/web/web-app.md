@@ -1,7 +1,7 @@
 # Web app
 
-The setup, login, LEDs, Layout, Status, Wi-Fi, Hotspot, MQTT, Time, Logs and System pages in `web/`; the LED
-pages are in `web/leds.js`, loaded on their first visit ([leds.md](../../leds.md)). The look, the page frame and how a page is built:
+The setup, login, Control, Sound, LED settings, Layout, Buttons, Status, Wi-Fi, Hotspot, MQTT, Time,
+Logs and System pages in `web/`; the LED pages are in `web/leds.js`, loaded on their first visit ([leds.md](../../leds.md)). The look, the page frame and how a page is built:
 [web-design.md](web-design.md). The built-in recovery page and the recovery app:
 [web-recovery.md](web-recovery.md).
 
@@ -11,17 +11,25 @@ pages are in `web/leds.js`, loaded on their first visit ([leds.md](../../leds.md
 Setup                     only while the device is not set up, no login
   Wi-Fi  ->  Web UI login  ->  Done
 Login
-Main pages                after login (the first one: LEDs)
-  LEDs                    on, brightness, animation, palette, color, speed, rotation, sound, status;
-                          presets; overlay; motion auto off (with a sensor); buttons (with any);
-                          sound input; power and timing
+Main pages                after login (the first one: Control), in the menu's groups
+                          (web-design.md section 3: a rail from 800 px, a tab bar on a phone)
+ Light
+  Control                 live preview; on, brightness, animation, palette, color, speed,
+                          rotation, sound, the state (with the motion's); presets; overlay
+  Sound                   the bands live, where the sound comes from, the UDP inputs, the
+                          microphone's settings (with the audio input)
+ Hardware
+  LED settings            power and timing; motion auto off (with a sensor)
   Layout                  canvas size, panels (lane, place, size, first LED, runs, zigzag),
-                          preview of the data path, "Show the edges"
-  Status                  device (firmware, build time), Wi-Fi, hotspot, memory, uptime
+                          preview of the data path, "Show the edges"; lanes
+  Buttons                 the actions of each button and the encoder's push (with any)
+ Network
   Wi-Fi                   saved networks (up to 5), add, forget, reconnect
   Hotspot                 on or off, name, password (none during the setup), new password, when it
                           opens by itself
   MQTT                    broker, login, discovery prefix, topics; the connection's state
+ Device
+  Status                  device (firmware, build time), Wi-Fi, hotspot, memory, uptime
   Time                    the clock, time zone, two SNTP servers
   Logs                    view and filter, debug mode
   System                  backup (export and import), firmware and file system update,
@@ -95,12 +103,12 @@ stays on, open, for 15 minutes after the first connection, so there is no hurry
 * The cookie is a signed token holding the username and the expiry, so no session table is
   needed.
 * **Anything that changes ends all tokens**: the username, the password, or a counter
-  stored in NVS. The counter is increased by "log out everywhere" in the menu.
+  stored in NVS. The counter is increased by "Log out everywhere" on the System page (card "Password").
 * **Change the password**: System, card "Password": the current password, the new one
   twice (8 to 64 characters). `POST /api/password` (`current`, `password`, the login of the
   session): a wrong current password waits 1 s and answers 400 (not 401, which would send the web
   UI to its login page). Every other session ends; the browser that changed it gets a new session
-  cookie, not remembered. The username stays (a new one: the console's `login-reset` or a `webui:` file).
+  cookie, not remembered. Below it in the card "Log out everywhere" (asks first). The username stays (a new one: the console's `login-reset` or a `webui:` file).
 * **From a file**: a `webui:` section with `user` and `password` in the backup file
   replaces the login (same rules as the setup page; every
   session ends, the browser that imported signs in again). Import only: the device stores a
@@ -111,55 +119,68 @@ stays on, open, for 15 minutes after the first connection, so there is no hurry
   key, and either way every old token fails the check. The counter is kept out of the password
   hash itself, because the device stores only the hash: increasing a counter inside it would
   need the plain password. So "log out everywhere" works without asking for the password.
-* Failed logins are slowed down (1 s). Log out is in the menu.
+* Failed logins are slowed down (1 s). Log out is at the bottom of the menu.
 * PBKDF2-HMAC-SHA256 with 1000 iterations: 10000 took 5.3 s on the ESP32 (PSA crypto) and
   blocked the web server for every login; 1000 take about 0.4 s.
 
 ## 4. Main pages
 
-**LEDs.** At the top the card "Live": the canvas as drawn (before the brightness), a cell per
+The LED pages are four plus Layout: what is changed every day on Control, the settings set once
+on Sound, LED settings and Buttons. The menu shows Sound only with the audio input and Buttons
+only with buttons or an encoder (`features` of `/api/status`, [web-design.md](web-design.md)
+section 3).
+
+**Control.** At the top the card "Live": the canvas as drawn (before the brightness), a cell per
 LED, about 10 pictures a second over a WebSocket while the page is open (closed within 3 s after
-leaving it or hiding the tab, opened again when the tab shows it; at most 4 viewers). The live controls send on change (a slider while it moves, at most every
-150 ms): the switch, brightness 1 to 255, the animation (an animation that needs sound, Spectrum,
-only with an audio source), the palette (only for an animation that takes one: "Its own colors",
-rainbow, party, ocean, forest, lava, heat, cloud, sunset, pastel, "Shades of the color"), the color
-(only for an animation that uses one, or with the palette made from it) and the speed, then
-the rotation (0, 90, 180, 270 degrees) and "Reacts to sound" (only with an audio source and for
-an animation that can react) with the sliders "Strength" (0 to 255, 128 as built), "Attack"
-(0 to 2000 ms, 20 as built) and "Release" (0 to 5000 ms, 250 as built) below it while it is on
-(always for Spectrum); the palette, the rotation and the sound settings belong to the current
-animation, each one keeps its own (a hint says so). The card "Presets": the saved presets (a
-swatch of the color, the name, "shown" on the one the light matches) with Show and Delete (asks
-first), and a name with "Save the light" (the light as it is now; a name that is there is
-replaced; up to 16). Showing one sets the light card's controls. The card "Overlay": show nothing, text or the clock, the color, the text (63
-bytes, scrolling when wider than the matrix) with its scroll speed, or 24 hours for the clock;
-Save. Below them the state (on with the frames per second, or off, or why
-nothing is shown), "Sound" (hears sound or silence, with an audio source),
-the estimated power with "limited" when the limit dims the frames, and the LEDs and lanes.
-Followed live (section 4.1, checked every 2 s); the controls are not drawn over, they show what
-the page sent. The card "Sound input": 32 bars of the bands (bass on the left, grey in
-silence), where the sound comes from (microphone, WARLS, WLED audio sync, nothing), the input
-(sound with a "beat" badge, or silence), the loudest band and the reference (microphone) or the
-packets (UDP) and the loudness; the bars, the input and the loudness come with the live socket
-(20 times a second) with the preview, the rest live (section 4.1, checked every 2 s; also the bars when the page gets no preview); a form with Save for the UDP inputs:
-WARLS (a switch and its port) and WLED audio sync (a switch); with a microphone a second form:
-gain (dB), automatic gain, silence below (dB), range (dB), beat threshold (times the bass), with
-a hint how they work together. With a motion sensor the card "Motion": "Off when nobody moves" (a switch),
-the minutes without motion (1 to 240, the sensor's hold: every motion starts them again; the hint
-says that only an auto off is undone by motion), and the state: the sensor (motion with the time
-it still holds, or clear) and the auto off ("off in 3 min without motion", "switched off by
-motion, on with the next motion"). With buttons or an encoder the card "Buttons": a row per
-button (its number and GPIO) and for the encoder's push, each with a click, a double click and a
-hold action (nothing, on / off, next or previous animation, next preset, brighter, darker, restart
-(held 3 s; only as a hold), open the hotspot, "Knob: animations"); a change is saved at once. A
-hint says how holds, repeats and double clicks behave and which button, held at boot, opens the
-hotspot (`hotspot` in the API); with an encoder a line on what turning it does. The card "Power and timing" is a form with Save: the power limit in W (0:
+leaving it or hiding the tab, opened again when the tab shows it; at most 4 viewers). The card
+"Light": the live controls send on change (a slider while it moves, at most every 150 ms): the
+switch, brightness 1 to 255, the animation (an animation that needs sound, Spectrum, only with an
+audio source), the palette (only for an animation that takes one: "Its own colors", rainbow,
+party, ocean, forest, lava, heat, cloud, sunset, pastel, "Shades of the color"), the color (only
+for an animation that uses one, or with the palette made from it) and the speed, then the
+rotation (0, 90, 180, 270 degrees) and "Reacts to sound" (only with an audio source and for an
+animation that can react) with the sliders "Strength" (0 to 255, 128 as built), "Attack" (0 to
+2000 ms, 20 as built) and "Release" (0 to 5000 ms, 250 as built) below it while it is on (always
+for Spectrum); the palette, the rotation and the sound settings belong to the current animation,
+each one keeps its own (a hint says so). Below them the state (on with the frames per second, or
+off, or why nothing is shown), "Sound" (hears sound or silence, with an audio source), the
+estimated power with "limited" when the limit dims the frames, the LEDs and lanes, and with a
+motion sensor "Motion" (motion with the time it still holds, or clear) and "Auto off" ("off in 3
+min without motion", "switched off by motion, on with the next motion"). Followed live (section
+4.1, checked every 2 s); the controls are not drawn over, they show what the page sent. The card
+"Presets": the saved presets (a swatch of the color, the name, "shown" on the one the light
+matches) with Show and Delete (asks first), and a name with "Save the light" (the light as it is
+now; a name that is there is replaced; up to 16). Showing one sets the light card's controls.
+The card "Overlay": show nothing, text or the clock, the color, the text (63 bytes, scrolling
+when wider than the matrix) with its scroll speed, or 24 hours for the clock; Save.
+
+**Sound.** The card "Sound input": 32 bars of the bands (bass on the left, grey in silence),
+where the sound comes from (microphone, WARLS, WLED audio sync, nothing), the input (sound with a
+"beat" badge, or silence), the loudest band and the reference (microphone) or the packets (UDP)
+and the loudness; the bars, the input and the loudness come 20 times a second over the preview's
+socket in its sound-only form (`/api/leds/live?audio`, no pixels), the rest live (section 4.1,
+checked every 2 s; also the bars when the page gets no socket). A form with Save for the UDP
+inputs: WARLS (a switch and its port) and WLED audio sync (a switch); with a microphone a second
+form: gain (dB), automatic gain, silence below (dB), range (dB), beat threshold (times the bass),
+with a hint how they work together.
+
+**LED settings.** The card "Power and timing" is a form with Save: the power limit in W (0:
 none), frames per second, fade time, supply settle time, the crossfade between animations (ms,
 0: none), what the LEDs do at power on (as before, off, on), the power model (one color of one LED
 at full, one LED while dark, in mW), with the hint that the estimate can be compared with a meter
 at the supply, the output (RMT or parallel; disabled on a chip without the parallel output) and
-dithering. The status also has the times of the last frame (`render_us`, `compose_us`,
+dithering. With a motion sensor the card "Motion": "Off when nobody moves" (a switch) and the
+minutes without motion (1 to 240, the sensor's hold: every motion starts them again; the hint
+says that only an auto off is undone by motion and that Control shows the sensor's state), each
+saved on change. The status also has the times of the last frame (`render_us`, `compose_us`,
 `send_us` in the API).
+
+**Buttons.** The card "Buttons": a row per button (its number and GPIO) and for the encoder's
+push, each with a click, a double click and a hold action (nothing, on / off, next or previous
+animation, next preset, brighter, darker, restart (held 3 s; only as a hold), open the hotspot,
+"Knob: animations"); a change is saved at once. A hint says how holds, repeats and double clicks
+behave and which button, held at boot, opens the hotspot (`hotspot` in the API); with an encoder
+a line on what turning it does. A board without any says so.
 
 Code: `components/leds`, `components/leds_api`, `components/presets`, `components/input`,
 `web/leds.js`. API: `GET /api/leds` (state,
@@ -180,7 +201,9 @@ and `hears`, `motion` with `sensor`, `detected`, `auto_off`, `minutes`, `off_in_
 login checked before the handshake: binary messages of 4 bytes width and height, 16 bits little
 endian each, then RGB row by row; the canvas 10 a second, 5 for one over 4096 pixels; with an
 audio input 20 messages a second, those between with 0 x 0, and every one ends with 34 bytes of
-sound: flags (1 active, 2 beat), loudness, the 32 bands).
+sound: flags (1 active, 2 beat), loudness, the 32 bands; `GET /api/leds/live?audio`, the same for
+the Sound page: only the messages of 0 x 0 with the sound, 20 a second, nothing without an audio
+input; the 4 viewers are shared).
 `GET /api/audio` (`running` and `microphone`, `source` (`""`, `microphone`, `warls`, `wled`),
 `packets`, the analysis, `settings`, `inputs` with `warls`, `warls_port`, `wled_sync`),
 `POST /api/audio` (the settings, `warls`, `warls_port`, `wled_sync`).
@@ -313,10 +336,10 @@ Time, LEDs) loads it once with its GET and then follows it on **one WebSocket pe
 few seconds any more.
 
 * The browser sends a text frame with the paths of the GETs it shows, up to 3 separated by a
-  space (the LEDs page: `/api/leds /api/audio /api/presets`), an empty frame for none: on a page
+  space (Control: `/api/leds /api/presets`), an empty frame for none: on a page
   change and while the tab is hidden. The device answers with `{"path": "/api/leds", "state":
   <the GET's answer>}` for each at once, then again whenever an answer changes. It looks every
-  second for Wi-Fi, Hotspot and Time, every 2 s for MQTT and the three of the LEDs page, every 3 s
+  second for Wi-Fi, Hotspot and Time, every 2 s for MQTT and the LED pages' paths, every 3 s
   for Status. The page drops a frame whose path it does not follow (one still on its way after a
   page change).
 * The login is checked before the handshake (401 without it) and on every check afterwards: a
@@ -326,7 +349,8 @@ few seconds any more.
   while it follows a page, so a socket that died without a close (the device restarted, the laptop
   slept) is found that way: after 25 s without a frame the app opens a new one. A socket that
   closes is opened again after 1, 2, 4 ... 10 s and asks for its paths again. At most 8 live
-  sockets. The LEDs page's preview (`/api/leds/live`, section 4) is a socket of its own.
+  sockets. The preview of Control and the bars of Sound (`/api/leds/live`, section 4) are a socket of
+  their own.
 * While a tab follows a page the Wi-Fi does not sleep ([architecture.md](../../architecture.md)
   section 9.2); a hidden tab lets it.
 * The recovery app has no WebSocket support: `/api/status` says `"live": false` there, and `live()`

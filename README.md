@@ -45,9 +45,10 @@ Built:
   backup's presets part.
 * Text and clock overlay over every animation (5 x 7 font with umlauts, scrolling).
 * At power on: as before, off or on.
-* Web: LEDs page (live preview, on, brightness, animation, palette, color, speed, rotation, sound
-  settings, presets, overlay, buttons, status, sound input with the bands live, power and timing)
-  and Layout.
+* Web, the LED pages: Control (live preview, the light, its state, presets, overlay), Sound (the
+  bands live, UDP inputs, microphone), LED settings (power and timing, motion), Layout, Buttons.
+* Web menu: an icon rail from 800 px, a tab bar with More on a phone; a page the board lacks is
+  hidden.
 * MQTT with Home Assistant discovery: light with the animations as effects and HA's transition,
   speed, rotation, palette, preset, reacts to sound, sound strength, attack and release, overlay
   and its text, transition and crossfade times, dithering, power on, power, motion, motion auto

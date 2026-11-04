@@ -9,6 +9,25 @@ and what is gone under Removed. Updated in the same commit as the change ([CLAUD
 
 ### 2026-11-03
 
+Changed
+
+* Web UI: the LEDs page is split in four. Control keeps the preview, the light with its state
+  (now with the motion sensor's), the presets and the overlay; Sound has the sound input; LED
+  settings the power and timing form and the motion auto off; Buttons the buttons' actions.
+  `#/leds` is still the first page.
+* Web UI: a new menu. From 800 px a rail of icons with a short name, the groups (Light,
+  Hardware, Network, Device) apart by a line, the appearance and log out at its bottom; on a
+  phone a tab bar at the bottom (Control, Sound, Layout, Wi-Fi, More), More opens every page as
+  a sheet. The Wi-Fi entry carries the connection's state as a dot. Sound and Buttons only show
+  on a board that has them, the recovery app shows Network and Device only. "Log out everywhere"
+  moved to the System page (card "Password").
+
+Added
+
+* `/api/status` lists the device's `features` (`leds`, `audio`, `buttons`) for the menu.
+* `GET /api/leds/live?audio`: the preview's socket with the sound alone (38 bytes, 20 a second),
+  for the bars of the Sound page; the canvas is not copied for it.
+
 Fixed
 
 * Web UI: a page left while it still loaded no longer takes the live socket from the next page

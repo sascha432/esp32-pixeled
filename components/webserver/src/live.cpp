@@ -41,7 +41,7 @@ constexpr const char *kTag = "web";
 constexpr size_t kMaxTopics = 12;
 // a tab each; more than the browsers of a household
 constexpr size_t kMaxClients = 8;
-// paths one tab follows at once (the LEDs page: the light, the sound, the presets)
+// paths one tab follows at once (Control: the light and the presets)
 constexpr size_t kMaxFollow = 3;
 constexpr size_t kMaxPath = 32;
 constexpr size_t kMaxFrame = kMaxFollow * kMaxPath;

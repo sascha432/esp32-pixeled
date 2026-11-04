@@ -327,7 +327,7 @@ only on a device with an audio source. Built 2026-10-21:
   column. The brightness of a reactive animation never goes below about a tenth.
 * **Strength** per animation (0 to 255, default 128 as above): the level an animation hears and
   the bands (fire, matrix rain, spectrum) are multiplied by strength / 128 (at most full); 255
-  reacts twice as much, 0 is the switch off. A slider under the switch on the LEDs page, Home
+  reacts twice as much, 0 is the switch off. A slider under the switch on Control, Home
   Assistant number "Sound strength", console `leds strength`, backup `strength` in
   `leds.animations`.
 * **Attack and release** per animation (built 2026-10-21): how fast the level and the bands rise
@@ -380,7 +380,7 @@ Solid, breathe, gradient, twinkle, meteor and matrix rain show the color and tak
 | color ("Shades of the color") | the color, down to a quarter of it in the middle and back |
 
 The palette is part of each animation's style (`leds::Style::palette`, section 6.2), kept per
-animation like the rotation: the LEDs page's select (shown for an animation that takes one), Home
+animation like the rotation: Control's select (shown for an animation that takes one), Home
 Assistant select "Palette", console `leds palette <slug>`, backup `palette` in
 `leds.animations` and in the presets. The index is stored: a new palette goes at the end.
 
@@ -475,7 +475,7 @@ settings (section 8.1 there).
   Rev 1.3 has a 10k pull-up and 100 nF on each button; rev 1.1's GPIOs are taken from rev 1.3 and
   to be checked.
 
-  Settings `input/settings` (written at once), the LEDs page card "Buttons",
+  Settings `input/settings` (written at once), the web page Buttons,
   `GET/POST /api/input`, backup section `input`, console `input`. The state machine is host tested
   (`host/tests/input_test.cpp`). The board's hotspot button (`board::Info::hotspot_button`,
   button 1 unless the board says otherwise; button 4, BTN3, on the rev 1.1 test board) held while
@@ -504,7 +504,7 @@ settings (section 8.1 there).
   palette). Stored on LittleFS (`/fs/presets.bin`, written beside it and renamed, so a power cut
   keeps the old or the new list; `tools/build_fs.py -p` keeps it), at once with every change.
   Showing one sets all of that and switches the LEDs on. The preset the light matches is found by
-  comparing (so a change of the brightness leaves it). LEDs page card "Presets",
+  comparing (so a change of the brightness leaves it). Control's card "Presets",
   `GET /api/presets` and `POST /api/presets/save|apply|delete`, Home Assistant select "Preset",
   the button action "next preset", console `leds preset [<name>|next|save <name>|delete <name>]`,
   the backup's presets part (section `presets`).

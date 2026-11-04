@@ -38,6 +38,7 @@ constexpr bool kLiveSocket = false;
 #endif
 
 const char *g_device_name = "";
+const char *g_features = "";
 uint32_t g_hotspot_ip = 0; // network byte order
 char g_hotspot_host[16] = {};
 char g_local_host[40] = {};
@@ -271,7 +272,16 @@ void write_status(JsonWriter &json)
         .end_object()
         // the web app's live socket (not in the recovery app)
         .boolean("live", kLiveSocket)
-        .end_object();
+        .begin_array("features");
+    // the pages the menu shows (Config::features)
+    for (const char *p = g_features; *p != '\0';) {
+        const size_t length = std::strcspn(p, " ");
+        if (length > 0) {
+            json.string(nullptr, p, length);
+        }
+        p += length + (p[length] == ' ' ? 1 : 0);
+    }
+    json.end_array().end_object();
 }
 
 esp_err_t get_status(httpd_req_t *req)
@@ -340,6 +350,7 @@ void prepare_portal()
 esp_err_t start(const Config &config)
 {
     g_device_name = config.device_name;
+    g_features = config.features != nullptr ? config.features : "";
     ESP_RETURN_ON_ERROR(detail::auth::init(), kTag, "login");
     std::snprintf(g_local_host, sizeof(g_local_host), "%s.local", config.device_name);
     prepare_portal();

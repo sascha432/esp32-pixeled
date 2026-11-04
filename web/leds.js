@@ -1,30 +1,32 @@
-// The LED pages of the web UI (docs/ui/web/web-app.md section 4): control and settings, and the
-// layout with its preview. Loaded by app.js on the first visit of one of them; uses its helpers
+// The LED pages of the web UI (docs/ui/web/web-app.md section 4): Control, Sound, LED settings,
+// Buttons and Layout. Loaded by app.js on the first visit of one of them; uses its helpers
 // (api, render, card, facts, esc, busy, toast, live).
 "use strict";
 
 window.pxLeds = (() => {
   const watts = (mw) => `${(mw / 1000).toFixed(1)} W`;
 
-  // ----------------------------------------------------------------------------- the LEDs page
+  // ---------------------------------------------------------------------------- the Control page
 
+  // Control: the preview, the light with its state, the presets and the overlay; what is changed
+  // every day. The settings that are set once are on the pages LED settings, Sound and Buttons.
   async function leds() {
-    const page = render(`<h1>LEDs</h1><div id="leds-live"></div><div id="leds-control">Loading ...</div><div id="leds-presets"></div><div id="leds-overlay"></div><div id="leds-motion"></div><div id="leds-buttons"></div><div id="leds-audio"></div><div id="leds-config"></div>`);
+    const page = render(`<h1>Control</h1><div id="leds-live"></div><div id="leds-control">Loading ...</div><div id="leds-presets"></div><div id="leds-overlay"></div>`);
     let s = await api("/api/leds");
 
+    // the state, with a motion sensor also its auto off: seen where the light is switched
     const statusFacts = () => facts([
       ["State", s.error ? `<span class="text-danger">${esc(s.error)}</span>`
         : s.supply_on ? `on, ${s.fps} fps` : "off"],
       ["Power", s.supply_on ? `${watts(s.power_mw)}${s.limited ? ' <span class="badge text-bg-warning">limited</span>' : ""}` : "-"],
       ["LEDs", s.leds ? `${s.leds} on ${s.lanes} lanes, canvas ${s.width} x ${s.height}` : "none"],
       ...(s.audio.source ? [["Sound", s.audio.hears ? "hears sound" : "silence"]] : []),
+      ...(s.motion.sensor ? motionFacts(s) : []),
     ]);
     const effectOf = (slug) => s.effects.find((e) => e.slug === slug) || {};
     // an animation that needs sound only with a source (the current one stays listed)
     const listed = (e) => e.reactive !== "required" || s.audio.source || e.slug === s.effect;
-    // the sound comes with the preview's socket; the card is drawn further down
-    let mic = null;
-    preview((frame) => mic?.live(frame));
+    preview();
 
     $("#leds-control").innerHTML = card("Light", `
       <div class="form-check form-switch mb-3">
@@ -108,7 +110,6 @@ window.pxLeds = (() => {
       s = answer;
       showStyle();
       $("#leds-status").innerHTML = statusFacts();
-      if ($("#motion-status")) $("#motion-status").innerHTML = motionFacts();
       presets.update();
     }).catch((e) => toast(e.message, "danger"));
     // a slider sends while it moves, at most every 150 ms, and once more where it stops
@@ -144,18 +145,57 @@ window.pxLeds = (() => {
       $("#leds-color").value = s.color;
       showStyle();
     });
-    await buttonCard();
     $("#leds-reactive").onchange = (e) => send({ reactive: e.target.checked ? "1" : "0" });
 
+    // The LED status (with the motion's) and the preset the light matches follow on the live socket
+    // (checked every 2 s, sent when they changed). The controls are not drawn over: they show what
+    // this page sent.
+    page.live("/api/leds", (state) => {
+      s = state;
+      const box = $("#leds-status");
+      if (box) box.innerHTML = statusFacts();
+    });
+    page.live("/api/presets", (state) => presets.update(state));
+  }
+
+  // the motion sensor's rows of the state: the sensor and the auto off
+  const motionFacts = (s) => {
+    const m = s.motion;
+    return [
+      ["Motion", m.detected ? (m.off_in_s ? `motion, holds for ${duration(m.off_in_s)}` : "motion") : "clear"],
+      ["Auto off", !m.auto_off ? "off" : m.off_by_motion ? "switched off by motion, on with the next motion"
+        : m.off_in_s ? `off in ${duration(m.off_in_s)} without motion` : s.on ? "waiting for motion" : "-"],
+    ];
+  };
+
+  // ------------------------------------------------------------------------------ the Sound page
+
+  // Sound: the analysis as it runs, the UDP inputs and the microphone. The bars come with the
+  // preview's socket in its sound-only form (20 a second), the rest on the live socket.
+  async function sound() {
+    const page = render(`<h1>Sound</h1><div id="leds-audio">Loading ...</div>`);
+    const mic = await soundInput();
+    if (!mic) {
+      $("#leds-audio").innerHTML = card("Sound input", '<p class="text-body-secondary mb-0">This firmware has no sound input.</p>');
+      return;
+    }
+    liveSocket({ anchor: $("#mic-bars"), audio: true, onAudio: (frame) => mic.live(frame) });
+    page.live("/api/audio", (state) => mic.update(state));
+  }
+
+  // ----------------------------------------------------------------------- the LED settings page
+
+  // LED settings: power and timing, and with a sensor the motion's auto off; set once (the form
+  // with Save, the motion's fields on change). The motion's state is on Control.
+  async function ledSettings() {
+    render(`<h1>LED settings</h1><div id="leds-config">Loading ...</div><div id="leds-motion"></div>`);
+    let s = await api("/api/leds");
+    const send = (form) => api("/api/leds", form).then((answer) => {
+      s = answer;
+      toast("saved", "success");
+    }).catch((e) => toast(e.message, "danger"));
+
     // motion auto off: only with a sensor
-    const motionFacts = () => {
-      const m = s.motion;
-      return facts([
-        ["Sensor", m.detected ? (m.off_in_s ? `motion, holds for ${duration(m.off_in_s)}` : "motion") : "clear"],
-        ["Auto off", !m.auto_off ? "off" : m.off_by_motion ? "switched off by motion, on with the next motion"
-          : m.off_in_s ? `off in ${duration(m.off_in_s)} without motion` : s.on ? "waiting for motion" : "-"],
-      ]);
-    };
     if (s.motion.sensor) {
       $("#leds-motion").innerHTML = card("Motion", `
         <div class="form-check form-switch mb-3">
@@ -166,8 +206,7 @@ window.pxLeds = (() => {
         <input id="motion-minutes" type="number" class="form-control mb-1" min="1" max="240" value="${s.motion.minutes}" style="max-width:8em">
         <div class="form-text mb-3">Every motion the sensor sees starts these minutes again; when they run out the LEDs go off
           (and the motion sensor in Home Assistant clears). The next motion switches the LEDs on again, but only when motion
-          switched them off: off by hand stays off.</div>
-        <div id="motion-status">${motionFacts()}</div>`);
+          switched them off: off by hand stays off. Control shows what the sensor sees.</div>`);
       $("#motion-auto").onchange = (e) => send({ auto_off: e.target.checked ? "1" : "0" });
       $("#motion-minutes").onchange = (e) => send({ auto_off_minutes: e.target.value });
     }
@@ -221,22 +260,16 @@ window.pxLeds = (() => {
         toast("saved", "success");
       });
     };
+  }
 
-    // the sound input: the microphone's settings, the UDP inputs and a live readout
-    mic = await soundInput();
+  // ---------------------------------------------------------------------------- the Buttons page
 
-    // The LED status, the sound's slower facts and the preset the light matches follow on the live
-    // socket (checked every 2 s, sent when they changed; the bands come with the preview's socket).
-    // The controls are not drawn over: they show what this page sent.
-    page.live("/api/leds", (state) => {
-      s = state;
-      const box = $("#leds-status");
-      if (box) box.innerHTML = statusFacts();
-      const motion = $("#motion-status");
-      if (motion) motion.innerHTML = motionFacts();
-    });
-    if (mic) page.live("/api/audio", (state) => mic.update(state));
-    page.live("/api/presets", (state) => presets.update(state));
+  // Buttons: what each button and the encoder's push do; a board without any says so.
+  async function buttons() {
+    render(`<h1>Buttons</h1><div id="leds-buttons">Loading ...</div>`);
+    if (!(await buttonCard())) {
+      $("#leds-buttons").innerHTML = card("Buttons", '<p class="text-body-secondary mb-0">This board has no buttons and no encoder.</p>');
+    }
   }
 
   // The card "Sound input": the analysis as it runs (32 bars, the levels), the microphone's settings
@@ -325,7 +358,7 @@ window.pxLeds = (() => {
           warls: $("#udp-warls").checked ? "1" : "0", warls_port: $("#udp-port").value,
           wled_sync: $("#udp-wled").checked ? "1" : "0",
         });
-        toast("saved: the LEDs page shows the sound settings once there is a source", "success");
+        toast("saved: Control shows the sound settings once there is a source", "success");
       });
     };
     $("#mic-form").onsubmit = (e) => {
@@ -418,15 +451,15 @@ window.pxLeds = (() => {
     };
   }
 
-  // The card "Buttons": what each button of the board and the encoder's push do; only with any.
+  // The card "Buttons": what each button of the board and the encoder's push do; false without any.
   async function buttonCard() {
     let b;
     try {
       b = await api("/api/input");
     } catch (e) {
-      return;
+      return false;
     }
-    if (!b.buttons.length && !b.encoder) return;
+    if (!b.buttons.length && !b.encoder) return false;
     const select = (key, value) => `<select class="form-select form-select-sm" data-key="${key}">
       ${b.actions.map((a) => `<option value="${esc(a.slug)}" ${a.slug === value ? "selected" : ""}>${esc(a.name)}</option>`).join("")}
       </select>`;
@@ -452,6 +485,7 @@ window.pxLeds = (() => {
           .then((answer) => { b = answer; toast("saved", "success"); }, (err) => toast(err.message, "danger"));
       };
     });
+    return true;
   }
 
   // The card "Overlay": text or the clock over every animation. `update` takes the answer.
@@ -500,24 +534,21 @@ window.pxLeds = (() => {
     };
   }
 
-  // The card "Live": the canvas as drawn, over a WebSocket (GET /api/leds/live), and the sound for
-  // `onAudio`. The socket closes within 3 s when the page is left (its canvas is gone) or the tab is
-  // hidden, and opens again when the tab shows the page.
-  function preview(onAudio) {
-    $("#leds-live").innerHTML = card("Live", `
-      <div><canvas id="live-canvas" class="border rounded" style="max-width:100%;image-rendering:pixelated"></canvas></div>
-      <div id="live-state" class="small text-body-secondary mt-1">connecting ...</div>`);
-    // this page's: a new visit of the page has its own
-    const canvas = $("#live-canvas"), stateLine = $("#live-state");
+  // The socket of GET /api/leds/live: `onPixels(data, width, height)` for a message with the canvas,
+  // `onAudio` for the sound at the end of one; `audio`: the sound alone (?audio, the Sound page).
+  // It closes within 3 s when the page is left (`anchor` is gone) or the tab is hidden, and opens
+  // again when the tab shows the page. `onState(text)` gets what it is doing.
+  function liveSocket({ anchor, audio = false, onPixels = () => {}, onAudio = () => {}, onState = () => {} }) {
     let socket = null;
     const open = () => {
-      socket = new WebSocket(`${location.protocol === "https:" ? "wss" : "ws"}://${location.host}/api/leds/live`);
+      socket = new WebSocket(`${location.protocol === "https:" ? "wss" : "ws"}://${location.host}/api/leds/live${audio ? "?audio" : ""}`);
       socket.binaryType = "arraybuffer";
       socket.onmessage = (m) => {
+        if (!anchor.isConnected) { socket?.close(); return; }
         const data = new Uint8Array(m.data);
         const width = data[0] | (data[1] << 8), height = data[2] | (data[3] << 8);
         const end = 4 + width * height * 3;
-        if (width && height) draw(data, width, height);
+        if (width && height) onPixels(data, width, height);
         // the sound after the pixels: flags (1 active, 2 beat), loudness, 32 bands
         if (data.length >= end + 34) {
           onAudio({ active: !!(data[end] & 1), beat: !!(data[end] & 2), loudness: data[end + 1],
@@ -525,12 +556,31 @@ window.pxLeds = (() => {
         }
       };
       socket.onclose = () => {
-        stateLine.textContent = document.hidden ? "paused" : "no preview (more than 4 open, or the connection closed)";
+        onState(document.hidden ? "paused" : "no preview (more than 4 open, or the connection closed)");
         socket = null;
       };
     };
+    open();
+    const watchdog = setInterval(() => {
+      if (!anchor.isConnected) {
+        clearInterval(watchdog);
+        socket?.close();
+      } else if (document.hidden) {
+        socket?.close();
+      } else if (!socket) {
+        open();
+      }
+    }, 3000);
+  }
+
+  // The card "Live": the canvas as drawn, a cell per LED.
+  function preview() {
+    $("#leds-live").innerHTML = card("Live", `
+      <div><canvas id="live-canvas" class="border rounded" style="max-width:100%;image-rendering:pixelated"></canvas></div>
+      <div id="live-state" class="small text-body-secondary mt-1">connecting ...</div>`);
+    // this page's: a new visit of the page has its own
+    const canvas = $("#live-canvas"), stateLine = $("#live-state");
     const draw = (data, width, height) => {
-      if (!canvas.isConnected) { socket?.close(); return; }
       const cell = Math.max(2, Math.min(16, Math.floor((canvas.parentElement.clientWidth - 2) / Math.max(1, width))));
       if (canvas.width !== width * cell || canvas.height !== height * cell) {
         canvas.width = width * cell;
@@ -549,17 +599,7 @@ window.pxLeds = (() => {
       }
       stateLine.textContent = `${width} x ${height}, as drawn (before the brightness)`;
     };
-    open();
-    const watchdog = setInterval(() => {
-      if (!canvas.isConnected) {
-        clearInterval(watchdog);
-        socket?.close();
-      } else if (document.hidden) {
-        socket?.close();
-      } else if (!socket) {
-        open();
-      }
-    }, 3000);
+    liveSocket({ anchor: canvas, onPixels: draw, onState: (text) => (stateLine.textContent = text) });
   }
 
   // ---------------------------------------------------------------------------- the layout page
@@ -760,5 +800,5 @@ window.pxLeds = (() => {
     });
   }
 
-  return { leds, layout };
+  return { leds, sound, ledSettings, buttons, layout };
 })();

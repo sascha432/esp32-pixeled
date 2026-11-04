@@ -149,12 +149,13 @@ def idle_close_test(device: str) -> None:
 
 
 class LiveSocket:
-    """A minimal WebSocket client (RFC 6455) for /api/live: text frames, standard library only."""
+    """A minimal WebSocket client (RFC 6455) for /api/live (text frames) and /api/leds/live (binary
+    frames, `binary()`), standard library only."""
 
-    def __init__(self, device: str, cookie: str):
+    def __init__(self, device: str, cookie: str, path: str = "/api/live"):
         self.sock = socket.create_connection((device, 80), timeout=5)
         key = base64.b64encode(os.urandom(16)).decode()
-        self.sock.sendall((f"GET /api/live HTTP/1.1\r\nHost: {device}\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n"
+        self.sock.sendall((f"GET {path} HTTP/1.1\r\nHost: {device}\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n"
                            f"Sec-WebSocket-Key: {key}\r\nSec-WebSocket-Version: 13\r\n"
                            + (f"Cookie: {cookie}\r\n" if cookie else "") + "\r\n").encode())
         head = b""
@@ -189,6 +190,23 @@ class LiveSocket:
             if message is None or message != {} or heartbeat:
                 return message
 
+    def binary(self, timeout: float) -> bytes | None:
+        """The next binary frame, None when none came within `timeout` s."""
+        self.sock.settimeout(timeout)
+        try:
+            first, second = self._read(2)
+        except socket.timeout:
+            return None
+        length = second & 0x7F
+        if length == 126:
+            length = int.from_bytes(self._read(2), "big")
+        elif length == 127:
+            length = int.from_bytes(self._read(8), "big")
+        payload = self._read(length)
+        if first & 0x0F == 0x8:
+            raise ConnectionError("closed by the device")
+        return payload if first & 0x0F == 0x2 else self.binary(timeout)
+
     def _frame(self, timeout: float) -> dict | None:
         self.sock.settimeout(timeout)
         try:
@@ -209,6 +227,28 @@ class LiveSocket:
         self.sock.close()
 
 
+def preview_test(device: str, cookie: str, features: list[str]) -> None:
+    """The LED preview socket: a plain one gets the canvas, one with ?audio (the Sound page) only the
+    sound, 0 x 0 and 34 bytes, never pixels."""
+    if "leds" not in features:
+        print("  (no LEDs: preview socket skipped)")
+        return
+    plain = LiveSocket(device, cookie, "/api/leds/live")
+    frames = [plain.binary(2) for _ in range(6)]
+    plain.close()
+    check(any(f and len(f) > 4 + 34 and (f[0] | f[1] << 8) > 0 for f in frames), "the preview socket sends the canvas",
+          str([len(f) if f else None for f in frames]))
+    sound = LiveSocket(device, cookie, "/api/leds/live?audio")
+    frames = [sound.binary(1) for _ in range(10)]
+    sound.close()
+    if "audio" in features:
+        got = [f for f in frames if f is not None]
+        check(len(got) >= 8 and all(len(f) == 4 + 34 and f[:4] == bytes(4) for f in got),
+              "the sound-only socket sends 38 byte frames, 20 a second", str([len(f) for f in got][:10]))
+    else:
+        check(all(f is None for f in frames), "the sound-only socket sends nothing without audio")
+
+
 def live_test(device: str, cookie: str, user: str, password: str) -> None:
     """The web app's live socket (docs/ui/web/web-app.md section 4.1)."""
     live = LiveSocket(device, "")
@@ -227,7 +267,7 @@ def live_test(device: str, cookie: str, user: str, password: str) -> None:
     _, got, _ = Client(device).request("GET", "/api/status", headers={"Cookie": cookie})
     check(second is not None and set(second["state"]) == set(got), "the pushed state has the keys of the GET",
           str(sorted(got))[:80])
-    # a page follows up to 3 paths on one socket (the LEDs page)
+    # a page follows up to 3 paths on one socket
     live.send("/api/status /api/hotspot /api/nothing")
     paths = set()
     for _ in range(4):
@@ -358,6 +398,8 @@ def main() -> None:
     status, s, _ = c.request("GET", "/api/status")
     check(status == 200 and "device" in s and "wifi" in s and s["device"].get("built"), "GET /api/status",
           f"heap {s.get('device', {}).get('heap_internal_kb')} KB, built {s.get('device', {}).get('built')}")
+    features = s.get("features") if status == 200 else None
+    check(isinstance(features, list) and "leds" in features, "/api/status lists the features", str(features))
     heap_before = s["device"]["heap_internal_kb"] if status == 200 else 0
     status, w, _ = c.request("GET", "/api/wifi")
     check(status == 200 and "saved" in w, "GET /api/wifi", f"{len(w.get('saved', []))} saved")
@@ -437,6 +479,7 @@ def main() -> None:
     idle_close_test(args.device)
     if s.get("live"):
         live_test(args.device, c.cookie, args.user, password)
+        preview_test(args.device, c.cookie, features or [])
     else:
         print("  (no live socket, the recovery app: the live test skipped)")
 

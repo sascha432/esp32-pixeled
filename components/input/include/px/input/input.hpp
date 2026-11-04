@@ -7,7 +7,7 @@
 // has one, else with GPIO interrupts (the C3).
 //
 // The actions are settings (NVS namespace "input", key "settings", written at once: an explicit
-// Save), set on the LEDs page (GET/POST /api/input) and in the backup (section "input").
+// Save), set on the Buttons page (GET/POST /api/input) and in the backup (section "input").
 
 #include <cstddef>
 #include <cstdint>

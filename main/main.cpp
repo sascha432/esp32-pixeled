@@ -233,7 +233,11 @@ extern "C" void app_main()
                                           }
                                           // the API answers without buttons too (none listed)
                                           px::input::register_routes(server);
-                                      }}) != ESP_OK) {
+                                      },
+                                  // the menu's pages (the Sound page also for the UDP inputs alone)
+                                  .features = px::audio::running()
+                                                  ? (px::input::running() ? "leds audio buttons" : "leds audio")
+                                                  : (px::input::running() ? "leds buttons" : "leds")}) != ESP_OK) {
             ESP_LOGE(kTag, "web server did not start");
         }
         const px::hass::Device device{.name = px::platform::device_name(),

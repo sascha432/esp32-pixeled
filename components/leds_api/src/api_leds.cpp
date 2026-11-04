@@ -29,6 +29,9 @@
 //                             With an audio input 20 a second, the ones between with 0 x 0 (no
 //                             pixels); every message then ends with the sound: flags (1 active,
 //                             2 beat), loudness, the 32 bands
+//   GET  /api/leds/live?audio the same socket for the sound alone (the Sound page): only the
+//                             messages of 0 x 0 with the sound, 20 a second; nothing without an
+//                             audio input
 //
 // Only in the main firmware: main registers the routes (webserver::Config::add_routes).
 
@@ -567,6 +570,8 @@ constexpr size_t kMaxLive = 4;
 constexpr size_t kAudioSize = 2 + effects::kBands;
 httpd_handle_t g_server = nullptr;
 int g_live[kMaxLive] = {-1, -1, -1, -1};
+// a watcher that asked for the sound alone (`?audio`): no pixels
+bool g_live_audio_only[kMaxLive] = {};
 esp_timer_handle_t g_live_timer = nullptr;
 uint32_t g_live_ticks = 0;
 uint8_t *g_live_buffer = nullptr;
@@ -588,14 +593,37 @@ size_t add_audio(size_t length)
     return length + kAudioSize;
 }
 
+// the message in the buffer to every watcher of the canvas; `length` 0: none for them. Then the
+// sound alone (its last bytes, after 0 x 0) to every watcher of the sound
 void send_frame(size_t length)
 {
+    static uint8_t sound[4 + kAudioSize];
+    const bool with_sound = g_audio != nullptr && length >= kAudioSize;
+    if (with_sound) {
+        std::memset(sound, 0, 4);
+        std::memcpy(sound + 4, g_live_buffer + length - kAudioSize, kAudioSize);
+    }
     httpd_ws_frame_t frame{};
     frame.type = HTTPD_WS_TYPE_BINARY;
-    frame.payload = g_live_buffer;
-    frame.len = length;
-    for (int &fd : g_live) {
-        if (fd >= 0 && httpd_ws_send_frame_async(g_server, fd, &frame) != ESP_OK) {
+    for (size_t i = 0; i < kMaxLive; i++) {
+        int &fd = g_live[i];
+        if (fd < 0) {
+            continue;
+        }
+        if (g_live_audio_only[i]) {
+            if (!with_sound) {
+                continue;
+            }
+            frame.payload = sound;
+            frame.len = sizeof(sound);
+        } else {
+            if (length == 0) {
+                continue;
+            }
+            frame.payload = g_live_buffer;
+            frame.len = length;
+        }
+        if (httpd_ws_send_frame_async(g_server, fd, &frame) != ESP_OK) {
             fd = -1;
         }
     }
@@ -603,12 +631,14 @@ void send_frame(size_t length)
 
 void send_live(void *)
 {
-    size_t open = 0;
-    for (int &fd : g_live) {
+    size_t open = 0, canvas = 0;
+    for (size_t i = 0; i < kMaxLive; i++) {
+        int &fd = g_live[i];
         if (fd >= 0 && httpd_ws_get_fd_info(g_server, fd) != HTTPD_WS_CLIENT_WEBSOCKET) {
             fd = -1; // closed, or the number taken by another connection
         }
         open += fd >= 0 ? 1 : 0;
+        canvas += fd >= 0 && !g_live_audio_only[i] ? 1 : 0;
     }
     if (open == 0) {
         esp_timer_stop(g_live_timer);
@@ -618,7 +648,8 @@ void send_live(void *)
         return;
     }
     const leds::Status s = leds::status();
-    const size_t pixels = static_cast<size_t>(s.width) * s.height;
+    // the pixels only for a watcher of the canvas
+    const size_t pixels = canvas > 0 ? static_cast<size_t>(s.width) * s.height : 0;
     // the canvas every other tick (10 a second), a large one every fourth; the sound every tick
     bool with_pixels = pixels > 0 && g_live_ticks++ % (pixels > 4096 ? 4 : 2) == 0;
     if (!with_pixels && g_audio == nullptr) {
@@ -646,7 +677,9 @@ void send_live(void *)
     g_live_buffer[1] = static_cast<uint8_t>(width >> 8);
     g_live_buffer[2] = static_cast<uint8_t>(height);
     g_live_buffer[3] = static_cast<uint8_t>(height >> 8);
-    send_frame(add_audio(4 + static_cast<size_t>(width) * height * 3));
+    // a watcher of the canvas gets a message of 0 x 0 only with the sound (as before)
+    const size_t length = add_audio(4 + static_cast<size_t>(width) * height * 3);
+    send_frame(length > 4 ? length : 0);
 }
 
 void on_live_timer(void *)
@@ -672,6 +705,7 @@ esp_err_t live_post_handshake(httpd_req_t *req)
         return ESP_FAIL; // enough watchers
     }
     *slot = fd;
+    g_live_audio_only[slot - g_live] = std::strstr(req->uri, "?audio") != nullptr;
     g_server = req->handle;
     if (g_live_timer == nullptr) {
         esp_timer_create_args_t args{};

@@ -9,7 +9,7 @@ microphone.
     python tools/audio_send.py <device> --input              the PC's sound input (numpy, sounddevice)
     python tools/audio_send.py <device> --seconds 20 --fps 40
 
-The device needs the input switched on (LEDs page, card "Sound input", or the console `audio set
+The device needs the input switched on (the Sound page of the web UI, or the console `audio set
 warls on` / `audio set wled on`). The demo is 120 beats a minute: a kick in the bass on every beat,
 a melody running through the middle bands, a hi-hat on the off beats. On exit a silent packet goes
 out, so the device falls back at once. Only the Python standard library for the demo.

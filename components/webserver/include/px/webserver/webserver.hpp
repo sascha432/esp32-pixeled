@@ -47,6 +47,9 @@ struct Config {
     // registers more routes on the server (an httpd_handle_t), before the files take the rest:
     // the LED API of the main firmware
     void (*add_routes)(void *server) = nullptr;
+    // what the device has, space separated, for the web app's menu (`features` in /api/status,
+    // docs/ui/web/web-design.md section 3): "leds", "audio", "buttons"; none in the recovery app
+    const char *features = "";
 };
 
 // Starts the server and the DNS responder. The network component has to be started.
