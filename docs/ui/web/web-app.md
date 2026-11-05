@@ -303,8 +303,9 @@ something the device does not have is not written, and in a file from another de
 ignored ("... (not on this device)"). No password is written; a Wi-Fi `password:` added to the
 file by hand is used. Import and Check upload the file (`POST /api/backup/import[?check=1]`): the
 whole file is checked first, one problem and nothing changes; the answer lists the sections, the
-problems, what to know ("Office needs its password") and what was ignored. A network without a
-password is saved as "password needed" and not tried until it gets one. Only the main firmware:
+problems, what to know ("Office needs its password") and what was ignored (503 "no memory for
+the file" when the device has no room for it). A network without a password is saved as
+"password needed" and not tried until it gets one. Only the main firmware:
 the recovery app has no backup (404), and its System page shows no Backup card.
 
 ```

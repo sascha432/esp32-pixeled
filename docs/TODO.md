@@ -15,6 +15,11 @@ GEQs light only with it), turned by a quarter, with a palette, at speed 0; no re
 to sound" is on there; the board is back on fire, brightness 52, WARLS off. Open: how they look on
 the matrix (for the user's eyes).
 
+State 2026-11-05, memory: a full heap no longer stops the firmware (`allocate_large` returns
+null); tried on the WLED controller rev 1.1 with a 128 x 64 layout ("no memory for the frame", the
+device ran on) and 5120 LEDs (fit), with the web UI open and again with no client connected (the
+same numbers), then its 24 x 32 layout restored.
+
 State 2026-11-04: the preview socket split like the pages, the canvas alone for Control and the
 sound alone for Sound (`/api/leds/live?audio`, 34 bytes); flashed on the WLED controller rev 1.1
 (COM7). Open: `tools/test_web.py` there (the login), Control and Sound looked at in the browser.
@@ -252,9 +257,8 @@ styles take it. Not tried: the factory reset path (it erases the test board's se
   two samples at 8 bits too (leds.md section 2.2). 8 lanes tested 2026-10-21 (lanes 5 to 8 on
   the free pins 17, 18, 23, 5 of the test board, no LEDs): 8 x 1024 at 32 fps, 8 x 2048 at 16 fps;
   the encoder takes 248 us of a buffer's 720 us with 8 lanes (`leds bench encode`). Open: the
-  picture with 1024 per lane; the render task with 8192 LEDs on an ESP32 without PSRAM (its
-  buffers come from `allocate_large`, which aborts when the heap is full; the console's test
-  frame of 8 x 2048 fits only alone).
+  picture with 1024 per lane. The render task with 8192 LEDs does not fit on an ESP32 without
+  PSRAM (phase 3, measured 2026-11-05); the console's test frame of 8 x 2048 fits only alone.
 * A crash at boot with a stored setting repeated forever (the first I2S driver did): built 2026-10-19,
   three crashes in a row start the LEDs off with RMT. A real crash (console `crash yes`) restarts
   with reason panic (2026-10-21); the count of three not tried yet.
@@ -283,11 +287,19 @@ styles take it. Not tried: the factory reset path (it erases the test board's se
 * Crossfade between two animations: built 2026-10-21 (1 s, a setting).
 * The supply off in the panic handler: built 2026-10-21; the pin not measured yet.
 * A test pattern per lane ("light the first LED of each lane") on the layout page.
-* Large layouts on an ESP32 without PSRAM: `memory::allocate_large` aborts when the heap is full,
-  so the render task's "no memory for the frame" and "no memory for the crossfade" never show;
-  the canvas, the frame and the animations' memory (since 2026-11-05 about 4 bytes per pixel plus
-  up to 6 KB, twice in a crossfade) are allocated through it. Measure how many LEDs fit, and let
-  these allocations fail softly.
+* Large layouts on an ESP32 without PSRAM fail softly (built 2026-11-05): `allocate_large` returns
+  null, the layout table is a `memory::Array`, the render task shows "no memory for the frame
+  (79 KB)" and gives back the buffers that did fit (the table stays, for the status). A layout
+  costs about 13 bytes per LED (table 3, canvas 3, frame 3, the animations' memory 3.8) plus up
+  to 6 KB, the crossfade 7 more per LED. Measured on the WLED controller rev 1.1 (79 KB free with
+  768 LEDs): 8192 LEDs (128 x 64, 4 lanes) "no memory for the frame (79 KB)" and the device ran
+  on; 5120 (4 x 1280) fit at 22 fps with 25 KB left (largest block 11 KB). The same with the web
+  UI open and with no client connected (console `sockets`). From 5120 straight to 8192,
+  `set_layout`'s check found no room for its 16 KB table and took the layout unchecked; the
+  render task then said "no memory for the frame". Open: the same with Control open (its live
+  preview holds two more copies of the canvas, 15 KB each at 5120); how much Wi-Fi, MQTT and the
+  web UI need free, so a safe maximum per board; the layout page could say before saving that a
+  layout will not fit.
 * The power model and the panel correction per lane (above).
 * The LED settings show up in the web UI only after a reload when changed from the console or
   Home Assistant: since 2026-11-02 the LED pages' status, the sound input and the presets follow

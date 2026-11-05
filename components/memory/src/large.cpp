@@ -20,16 +20,14 @@ void set_large_heap(AllocateFunction allocate, ReleaseFunction release)
 
 void *allocate_large(size_t size)
 {
-    void *pointer = allocate_function(size == 0 ? 1 : size);
-    if (pointer == nullptr) {
-        std::abort();
-    }
-    return pointer;
+    return allocate_function(size == 0 ? 1 : size);
 }
 
 void release_large(void *pointer)
 {
-    release_function(pointer);
+    if (pointer != nullptr) {
+        release_function(pointer);
+    }
 }
 
 } // namespace px::memory

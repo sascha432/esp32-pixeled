@@ -56,6 +56,9 @@ esp_err_t get_log_text(httpd_req_t *req)
     }
     const size_t capacity = logbuf::capacity();
     char *text = capacity > 0 ? static_cast<char *>(memory::allocate_large(capacity)) : nullptr;
+    if (capacity > 0 && text == nullptr) {
+        return send_error(req, "503 Service Unavailable", "no memory for the log");
+    }
     const size_t length = text != nullptr ? logbuf::copy(text, capacity) : 0;
     httpd_resp_set_type(req, "text/plain; charset=utf-8");
     httpd_resp_set_hdr(req, "Cache-Control", "no-store");

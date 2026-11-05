@@ -145,8 +145,14 @@ hand it a frame, get a callback when it is out. Behind it one backend per chip:
   answers the handshake without calling the route's handler: the login is checked in the
   pre-handshake callback and the viewer taken in the post-handshake one.
 * **Memory**: 8192 pixels x 3 bytes = 24 KB per canvas; a second canvas for the crossfade
-  between animations. On the ESP32 without PSRAM: the canvas sizes and the DMA ring decide the
-  maximum LED count (to measure).
+  between animations. A layout costs about 13 bytes per LED (the layout table 3, the canvas 3,
+  the frame 3, the animations' memory 3.8) plus up to 6 KB, the crossfade 7 more per LED. On the
+  ESP32 without PSRAM 5120 LEDs fit, with 25 KB left, and 8192 do not (WLED controller rev 1.1,
+  2026-11-05, no client connected; the live preview on Control holds two more copies of the
+  canvas). A layout that does not fit leaves the LEDs dark with "no memory for the frame
+  (79 KB)" (or "... for the layout table") in the status, gives back the buffers that did fit
+  and keeps the device running; the quarter turn, the crossfade and the preview are skipped
+  without their memory and tried again a second later.
 * **Frame pacing**: a frame is rendered while the previous one is sent; the target fps is a
   setting, the reached fps a status value.
 * **Color depth** (built): gamma 2.2 on the color as a 16-bit table, times the brightness on a
@@ -315,7 +321,7 @@ only on a device with an audio source. Built 2026-10-21:
   2026-11-05, for the animations after WLED's, section 6.3) is an RGB canvas of the animation's
   own (3 bytes per pixel) and its particles (one per three pixels, 48 to 384, 16 bytes each): 6.5 KB
   for the 768 LEDs of the test matrix, about 30 KB for 8192, twice with the crossfade. On an ESP32
-  without PSRAM this lowers the number of LEDs that fit (to measure).
+  without PSRAM this lowers the number of LEDs that fit (5120, section 3).
 * **What an animation hears:** the loudness smoothed with the attack and release (20 and 250 ms
   as built); in silence it falls with the release instead of starting again from 0. The
   brightness comes from it (never below a quarter) while there is sound and is full in silence,

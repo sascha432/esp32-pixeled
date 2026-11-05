@@ -99,7 +99,7 @@ Built: `leds` (the render task), `output` (RMT, the parallel outputs of the ESP3
 
 | Component | Depends on | Pure (host build) | Responsibility |
 | --- | --- | --- | --- |
-| `memory` | nothing | yes | The heap for large data: `main` points it at PSRAM at start where there is one, the PC build uses malloc. `memory::Vector` and `memory::String` allocate from it |
+| `memory` | nothing | yes | The heap for large data: `main` points it at PSRAM at start where there is one, the PC build uses malloc. `memory::Vector` and `memory::String` allocate from it (and stop the firmware when it is full), `allocate_large` and `memory::Array` answer null or false (section 11) |
 | `formats` | `memory` | yes | `JsonWriter` (the web server's answers), the YAML subset reader of the backup, the multipart reader of uploads |
 | `config` | `formats`, `memory` | yes | The backup file: sections with write, check and apply (section 9.3) |
 | `platform` | `littlefs`, `nvs_flash` | no | Boot log, both NVS partitions, LittleFS at `/fs`, the settings class, the device name, SNTP and the time zones |
@@ -485,9 +485,13 @@ esp32-pixeled/
   accepted: `devconsole.cpp` (a development tool).
 * Memory: large buffers in PSRAM where there is one (`memory::allocate_large`,
   `heap_caps_malloc_prefer`); DMA buffers and code that runs with the cache off in internal RAM,
-  asked for with `heap_caps_malloc`. No allocation per frame in the render path. On the S3 a
-  static object that only tasks touch, never an interrupt, the render path or code that runs with
-  the cache off, is `EXT_RAM_BSS_ATTR`, in PSRAM (`CONFIG_SPIRAM_ALLOW_BSS_SEG_EXTERNAL_MEMORY`
+  asked for with `heap_caps_malloc`. No allocation per frame in the render path. A full heap is
+  an answer, not a stop: `allocate_large` returns null and the caller says so ("no memory for
+  the frame") and goes on; one that would try again every frame waits a second first.
+  `memory::Vector` and `memory::String` cannot report it (no exceptions) and stop the firmware,
+  so what grows with the LEDs uses `allocate_large` or `memory::Array` (its `assign` says false).
+  On the S3 a static object that only tasks touch, never an interrupt, the render path or code
+  that runs with the cache off, is `EXT_RAM_BSS_ATTR`, in PSRAM (`CONFIG_SPIRAM_ALLOW_BSS_SEG_EXTERNAL_MEMORY`
   in `sdkconfig.main.esp32s3`): the network task's state and its copies, the import tables, the
   pending settings writes, the answer buffers of the web handlers, MQTT's announcement buffers,
   the live socket's clients (21 KB). In code the PC builds compile too it is `PX_PSRAM_BSS`

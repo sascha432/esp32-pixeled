@@ -574,6 +574,7 @@ esp_timer_handle_t g_live_timer = nullptr;
 uint32_t g_live_ticks = 0;
 uint8_t *g_live_buffer = nullptr;
 size_t g_live_size = 0;
+int64_t g_live_retry_us = 0;
 void (*g_audio)(effects::Audio &out) = nullptr;
 
 // the message to every watcher of the sound (`sound`) or of the canvas; one whose send fails is
@@ -613,10 +614,15 @@ void send_canvas()
     }
     const size_t size = 4 + pixels * 3;
     if (g_live_size < size) {
+        const int64_t now = esp_timer_get_time();
+        if (now < g_live_retry_us) {
+            return;
+        }
         memory::release_large(g_live_buffer);
         g_live_buffer = static_cast<uint8_t *>(memory::allocate_large(size));
         g_live_size = g_live_buffer != nullptr ? size : 0;
         if (g_live_buffer == nullptr) {
+            g_live_retry_us = now + 1000000; // tried again a second later, not every tick
             return;
         }
     }

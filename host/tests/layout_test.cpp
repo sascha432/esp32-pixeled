@@ -1,5 +1,7 @@
 // components/layout/src/layout.cpp: the panel answers into the canvas table.
 
+#include <cstdlib>
+
 #include "check.hpp"
 #include "px/layout/layout.hpp"
 
@@ -106,4 +108,17 @@ TEST(layout_refuses_what_cannot_be_shown)
     const Panel empty[] = {{.lane = 0, .x = 0, .y = 0, .width = 0, .height = 2}};
     CHECK_STR(build(4, 4, empty).error().text, "panel 1 has no size");
     CHECK_STR(build(100, 100, {}).error().text, "the canvas is 100x100, it may have 1 to 8192 pixels");
+}
+
+// a full heap is an answer, not a stop: the render task shows it, set_layout takes the layout
+TEST(layout_without_memory_for_the_table)
+{
+    px::memory::set_large_heap([](size_t) -> void * { return nullptr; }, std::free);
+    const Panel panel[] = {{.lane = 0, .x = 0, .y = 0, .width = 128, .height = 64}};
+    const auto table = build(128, 64, panel);
+    px::memory::set_large_heap(std::malloc, std::free);
+    REQUIRE(!table);
+    CHECK(table.error().no_memory);
+    CHECK_STR(table.error().text, "no memory for the layout table (24 KB)");
+    CHECK(!build(100, 100, {}).error().no_memory);
 }

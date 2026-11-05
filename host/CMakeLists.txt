@@ -27,6 +27,7 @@ add_executable(px_tests
     tests/frame_test.cpp
     tests/input_test.cpp
     tests/layout_test.cpp
+    tests/memory_test.cpp
     tests/multipart_test.cpp
     tests/network_test.cpp
     tests/overlay_test.cpp

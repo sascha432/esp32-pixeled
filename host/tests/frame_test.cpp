@@ -19,7 +19,7 @@ px::layout::Table one_lane(std::initializer_list<uint16_t> leds, uint16_t width)
     px::layout::Table table;
     table.width = width;
     table.height = 1;
-    table.led = leds;
+    table.led.assign(leds);
     table.lane.assign(table.led.size(), 0);
     table.lanes = 1;
     table.leds = table.led.size();
@@ -148,8 +148,8 @@ TEST(frame_lane_factors_and_dithering_per_lane)
     px::layout::Table table;
     table.width = 2;
     table.height = 1;
-    table.led = {0, 1};
-    table.lane = {0, 1};
+    table.led.assign({0, 1});
+    table.lane.assign({0, 1});
     table.lanes = 2;
     table.leds = 2;
     const LaneMix lanes[2] = {{}, {.red = 128, .green = 128, .blue = 0, .dither = false}};

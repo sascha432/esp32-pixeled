@@ -72,18 +72,21 @@ bool read_body(httpd_req_t *req, char *out, size_t size)
     return true;
 }
 
-char *read_large_body(httpd_req_t *req, size_t limit, size_t &length)
+std::expected<char *, esp_err_t> read_large_body(httpd_req_t *req, size_t limit, size_t &length)
 {
     if (req->content_len == 0 || req->content_len > limit) {
-        return nullptr;
+        return std::unexpected(ESP_ERR_INVALID_SIZE);
     }
     auto *body = static_cast<char *>(memory::allocate_large(req->content_len + 1));
+    if (body == nullptr) {
+        return std::unexpected(ESP_ERR_NO_MEM);
+    }
     size_t received = 0;
     while (received < req->content_len) {
         const int n = httpd_req_recv(req, body + received, req->content_len - received);
         if (n <= 0) {
             memory::release_large(body);
-            return nullptr;
+            return std::unexpected(ESP_ERR_TIMEOUT);
         }
         received += static_cast<size_t>(n);
     }

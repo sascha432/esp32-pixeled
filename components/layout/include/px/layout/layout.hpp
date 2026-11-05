@@ -51,9 +51,9 @@ struct Table {
     uint16_t width = 0;
     uint16_t height = 0;
     // canvas pixel (x + y * width) -> LED index in the output frame, kNone: no LED there
-    memory::Vector<uint16_t> led;
+    memory::Array<uint16_t> led;
     // canvas pixel -> its lane (0 where there is no LED), for the settings of each lane
-    memory::Vector<uint8_t> lane;
+    memory::Array<uint8_t> lane;
     // the pixels of each lane
     uint16_t lane_pixels[kMaxLanes] = {};
     size_t lanes = 0;
@@ -63,6 +63,8 @@ struct Table {
 // The problem of a layout, for people: "panel 2 reaches outside the canvas"
 struct Error {
     char text[96];
+    // the heap had no room for the table (3 bytes per pixel): the layout itself was not checked
+    bool no_memory = false;
 };
 
 // The index of the LED at (x, y) of the panel, counted from the panel's first LED.
@@ -70,7 +72,8 @@ size_t index_in_panel(const Panel &panel, uint16_t x, uint16_t y);
 
 // The table of a canvas of `width` x `height` shown by `panels`. Refused: an empty canvas or one
 // larger than kMaxPixels, a panel of size 0, outside the canvas or on a lane from kMaxLanes on,
-// panels that overlap, a lane without a panel while a later lane has one.
+// panels that overlap, a lane without a panel while a later lane has one. Error::no_memory when
+// the large heap has no room for the table.
 std::expected<Table, Error> build(uint16_t width, uint16_t height, std::span<const Panel> panels);
 
 } // namespace px::layout

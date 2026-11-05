@@ -69,10 +69,13 @@ esp_err_t post_import(httpd_req_t *req)
     char check[8] = {};
     const bool check_only = query_value(req, "check", check, sizeof(check)) && std::strcmp(check, "1") == 0;
     size_t length = 0;
-    char *body = read_large_body(req, kMaxBackup, length);
-    if (body == nullptr) {
-        return send_error(req, "400 Bad Request", "the request is empty or larger than 256 KB");
+    const auto read = read_large_body(req, kMaxBackup, length);
+    if (!read) {
+        return read.error() == ESP_ERR_NO_MEM
+                   ? send_error(req, "503 Service Unavailable", "no memory for the file")
+                   : send_error(req, "400 Bad Request", "the request is empty or larger than 256 KB");
     }
+    char *body = *read;
     const BackupReport report = g_backup->import_file(std::string_view(body, length), check_only);
     memory::release_large(body);
 
@@ -88,6 +91,13 @@ esp_err_t post_import(httpd_req_t *req)
     JsonWriter measure(nullptr, 0);
     write(measure);
     auto *buffer = static_cast<char *>(memory::allocate_large(measure.needed() + 1));
+    if (buffer == nullptr) {
+        // done (or refused) already: only the report is missing
+        return send_error(req, "503 Service Unavailable",
+                          refused      ? "not imported, the file has problems; no memory to list them"
+                          : check_only ? "the file is fine; no memory for the report"
+                                       : "imported; no memory for the report");
+    }
     JsonWriter json(buffer, measure.needed() + 1);
     write(json);
     if (refused) {

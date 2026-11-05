@@ -53,8 +53,11 @@ std::expected<Table, Error> build(uint16_t width, uint16_t height, std::span<con
     Table table;
     table.width = width;
     table.height = height;
-    table.led.assign(pixels, kNone);
-    table.lane.assign(pixels, 0);
+    if (!table.led.assign(pixels, kNone) || !table.lane.assign(pixels, 0)) {
+        auto error = fail("no memory for the layout table (%u KB)", static_cast<unsigned>((pixels * 3 + 1023) / 1024));
+        error.error().no_memory = true;
+        return error;
+    }
 
     // the first LED of each panel within its lane: the panels before it on the lane
     size_t start[64] = {};

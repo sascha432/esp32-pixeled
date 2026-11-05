@@ -128,6 +128,8 @@ struct Task {
     size_t memory_size = 0;
     uint32_t memory_for = 0xffffffff;
     effects::Rgb *spare = nullptr;
+    // the spare canvas did not fit: the next try (a second later, not every frame); 0 before a failure
+    int64_t spare_retry_us = 0;
     // the crossfade: the previous animation on its own canvas with its own memory (allocated with
     // the first switch), until fade_until_us
     effects::Rgb *fade_canvas = nullptr;
@@ -196,6 +198,7 @@ size_t g_preview_size = 0;
 uint16_t g_preview_width = 0;
 uint16_t g_preview_height = 0;
 int64_t g_preview_asked_us = -10000000;
+int64_t g_preview_retry_us = 0;
 
 void update_mix()
 {
@@ -359,6 +362,7 @@ void apply_layout()
     t.frame = nullptr;
     t.memory = nullptr;
     t.spare = nullptr;
+    t.spare_retry_us = 0;
     t.fade_canvas = nullptr;
     t.fade_memory = nullptr;
     t.fading = false;
@@ -391,7 +395,17 @@ void apply_layout()
     t.memory_size = effects::memory_size(t.layout.width, t.layout.height);
     t.memory = static_cast<uint8_t *>(memory::allocate_large(t.memory_size));
     if (t.canvas == nullptr || t.frame == nullptr || t.memory == nullptr) {
-        set_error("no memory for the frame");
+        // what did fit goes back: the web UI needs the room to change the layout
+        memory::release_large(t.canvas);
+        memory::release_large(t.frame);
+        memory::release_large(t.memory);
+        t.canvas = nullptr;
+        t.frame = nullptr;
+        t.memory = nullptr;
+        char text[64];
+        std::snprintf(text, sizeof(text), "no memory for the frame (%u KB)",
+                      static_cast<unsigned>((pixels * sizeof(effects::Rgb) + t.frame_size + t.memory_size + 1023) / 1024));
+        set_error(text);
         return;
     }
     std::memset(t.frame, 0, t.frame_size);
@@ -450,10 +464,15 @@ bool has_audio_source()
 void draw(uint8_t effect, const Style &style, effects::Rgb *pixels, uint8_t *memory, const effects::Audio *audio,
           uint32_t ms)
 {
-    // the spare canvas once a quarter turn needs it; without the memory for it, not turned
-    if ((style.rotation & 1) != 0 && t.spare == nullptr) {
+    // the spare canvas once a quarter turn needs it; without the memory for it, not turned (and
+    // tried again a second later)
+    if ((style.rotation & 1) != 0 && t.spare == nullptr && esp_timer_get_time() >= t.spare_retry_us) {
         t.spare = static_cast<effects::Rgb *>(
             memory::allocate_large(static_cast<size_t>(t.layout.width) * t.layout.height * sizeof(effects::Rgb)));
+        if (t.spare == nullptr && t.spare_retry_us == 0) {
+            ESP_LOGW(kTag, "no memory for the quarter turn");
+        }
+        t.spare_retry_us = t.spare != nullptr ? 0 : esp_timer_get_time() + 1000000;
     }
     effects::Canvas canvas{t.layout.width, t.layout.height, pixels, memory, t.memory_size, t.spare};
     const effects::Params params{.color = t.state.color,
@@ -528,17 +547,20 @@ void copy_preview()
 {
     const size_t size = static_cast<size_t>(t.layout.width) * t.layout.height * 3;
     xSemaphoreTake(g_lock, portMAX_DELAY);
-    const bool wanted = esp_timer_get_time() - g_preview_asked_us < 2000000;
-    if (wanted && g_preview_size != size) {
+    const int64_t now = esp_timer_get_time();
+    const bool wanted = now - g_preview_asked_us < 2000000;
+    if (wanted && g_preview_size != size && now >= g_preview_retry_us) {
         memory::release_large(g_preview);
         g_preview = static_cast<uint8_t *>(memory::allocate_large(size));
         g_preview_size = g_preview != nullptr ? size : 0;
+        // without the memory: tried again a second later, not every frame
+        g_preview_retry_us = g_preview != nullptr ? 0 : now + 1000000;
     } else if (!wanted && g_preview != nullptr) {
         memory::release_large(g_preview);
         g_preview = nullptr;
         g_preview_size = 0;
     }
-    if (wanted && g_preview != nullptr) {
+    if (wanted && g_preview != nullptr && g_preview_size == size) {
         std::memcpy(g_preview, t.canvas, size);
         g_preview_width = t.layout.width;
         g_preview_height = t.layout.height;
@@ -901,8 +923,11 @@ bool layout_error(const Layout &layout, char *error, size_t error_size)
     if (layout.panel_count == 0) {
         return false; // no layout: nothing is shown
     }
+    // A second table besides the render task's: without the room for it the layout is taken
+    // unchecked. The render task builds it again after it let go of its own buffers and shows the
+    // problem then (a large layout on an ESP32 without PSRAM could not be replaced otherwise).
     auto table = layout::build(layout.width, layout.height, {layout.panels, layout.panel_count});
-    if (!table) {
+    if (!table && !table.error().no_memory) {
         std::snprintf(error, error_size, "%s", table.error().text);
         return true;
     }

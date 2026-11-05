@@ -6,6 +6,7 @@
 // `if (!require_login(req)) return ESP_OK;`.
 
 #include <cstddef>
+#include <expected>
 
 #include "esp_http_server.h"
 #include "px/formats/json_writer.hpp"
@@ -18,10 +19,11 @@ using formats::JsonWriter;
 // Reads the whole body into `out` (terminated). False when it is larger than the buffer.
 bool read_body(httpd_req_t *req, char *out, size_t size);
 
-// The whole request body in a buffer of the large heap (memory::release_large), terminated; null
-// when it is empty, larger than `limit` or the client stalls (one receive timeout, 5 s: a form
-// arrives at once).
-char *read_large_body(httpd_req_t *req, size_t limit, size_t &length);
+// The whole request body in a buffer of the large heap (memory::release_large), terminated.
+// ESP_ERR_INVALID_SIZE when it is empty or larger than `limit`, ESP_ERR_NO_MEM when the heap has
+// no room for it, ESP_ERR_TIMEOUT when the client stalls (one receive timeout, 5 s: a form arrives
+// at once) or goes away.
+std::expected<char *, esp_err_t> read_large_body(httpd_req_t *req, size_t limit, size_t &length);
 
 // the value of `key` in the query string, false when it is not there
 bool query_value(httpd_req_t *req, const char *key, char *out, size_t size);

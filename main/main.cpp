@@ -176,8 +176,8 @@ extern "C" void app_main()
     // first, so the web UI's log has the boot as well
     px::logbuf::start();
     heap_caps_register_failed_alloc_callback(on_alloc_failed);
-    // large data (the backup's trees, later the frame buffers) prefers the PSRAM where there is one
-    // (docs/architecture.md section 11)
+    // large data (the backup's trees, the render task's canvas, frame and layout table) prefers the
+    // PSRAM where there is one (docs/architecture.md section 11)
     px::memory::set_large_heap(
         [](size_t size) {
             return heap_caps_malloc_prefer(size, 2, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT, MALLOC_CAP_DEFAULT);

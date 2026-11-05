@@ -22,6 +22,21 @@ Changed
 * The animations' memory is the larger of a byte per pixel and a trail of 3 bytes per pixel plus
   up to 384 particles (6 KB): 6.5 KB for 768 LEDs, about 30 KB for 8192, twice during a
   crossfade. An ESP32 without PSRAM fits fewer LEDs than before.
+* For developers: `memory::allocate_large` returns null when the heap is full instead of
+  stopping the firmware; `memory::Vector` and `memory::String` still stop it (no exceptions).
+  The layout table is a `memory::Array`, whose `assign` says false then. `read_large_body` says
+  why it failed (`std::expected`, `ESP_ERR_NO_MEM`).
+
+Fixed
+
+* A layout too large for the memory (an ESP32 without PSRAM) no longer restarts the device: the
+  LEDs stay dark, the status says "no memory for the frame (79 KB)" (or "... for the layout
+  table") and the web UI keeps working to change the layout. The buffers that did fit are given
+  back. Measured on the WLED controller rev 1.1 with no client connected: 5120 LEDs fit (25 KB
+  left), 8192 do not.
+* Without the memory for the quarter turn, the crossfade, the preview or the live view these are
+  skipped and tried again a second later, not every frame. The backup import and the log download
+  answer 503 "no memory" where they stopped the device.
 
 ### 2026-11-04
 
