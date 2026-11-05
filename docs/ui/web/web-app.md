@@ -199,11 +199,10 @@ and `hears`, `motion` with `sensor`, `detected`, `auto_off`, `minutes`, `off_in_
 `dither` (`1`, `0`)), `POST /api/leds/overlay` (any of `mode` (`off`, `text`, `clock`), `text`,
 `color`, `speed`, `clock_24h`; answers like `GET /api/leds`), `GET /api/leds/live` (a WebSocket,
 login checked before the handshake: binary messages of 4 bytes width and height, 16 bits little
-endian each, then RGB row by row; the canvas 10 a second, 5 for one over 4096 pixels; with an
-audio input 20 messages a second, those between with 0 x 0, and every one ends with 34 bytes of
-sound: flags (1 active, 2 beat), loudness, the 32 bands; `GET /api/leds/live?audio`, the same for
-the Sound page: only the messages of 0 x 0 with the sound, 20 a second, nothing without an audio
-input; the 4 viewers are shared).
+endian each, then RGB row by row; 10 a second, 5 for a canvas over 4096 pixels, nothing else;
+`GET /api/leds/live?audio`, the sound instead, for the Sound page: binary messages of 34 bytes,
+flags (1 active, 2 beat), loudness, the 32 bands, 20 a second, nothing without an audio input;
+the 4 viewers are shared).
 `GET /api/audio` (`running` and `microphone`, `source` (`""`, `microphone`, `warls`, `wled`),
 `packets`, the analysis, `settings`, `inputs` with `warls`, `warls_port`, `wled_sync`),
 `POST /api/audio` (the settings, `warls`, `warls_port`, `wled_sync`).

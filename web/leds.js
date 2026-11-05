@@ -534,8 +534,8 @@ window.pxLeds = (() => {
     };
   }
 
-  // The socket of GET /api/leds/live: `onPixels(data, width, height)` for a message with the canvas,
-  // `onAudio` for the sound at the end of one; `audio`: the sound alone (?audio, the Sound page).
+  // The socket of GET /api/leds/live: `onPixels(data, width, height)` for each canvas; `audio`: the
+  // sound instead (?audio, the Sound page), `onAudio(frame)` for each of its messages.
   // It closes within 3 s when the page is left (`anchor` is gone) or the tab is hidden, and opens
   // again when the tab shows the page. `onState(text)` gets what it is doing.
   function liveSocket({ anchor, audio = false, onPixels = () => {}, onAudio = () => {}, onState = () => {} }) {
@@ -546,14 +546,17 @@ window.pxLeds = (() => {
       socket.onmessage = (m) => {
         if (!anchor.isConnected) { socket?.close(); return; }
         const data = new Uint8Array(m.data);
-        const width = data[0] | (data[1] << 8), height = data[2] | (data[3] << 8);
-        const end = 4 + width * height * 3;
-        if (width && height) onPixels(data, width, height);
-        // the sound after the pixels: flags (1 active, 2 beat), loudness, 32 bands
-        if (data.length >= end + 34) {
-          onAudio({ active: !!(data[end] & 1), beat: !!(data[end] & 2), loudness: data[end + 1],
-            bands: Array.from(data.subarray(end + 2, end + 34)) });
+        if (audio) {
+          // the sound: flags (1 active, 2 beat), loudness, 32 bands
+          if (data.length >= 34) {
+            onAudio({ active: !!(data[0] & 1), beat: !!(data[0] & 2), loudness: data[1],
+              bands: Array.from(data.subarray(2, 34)) });
+          }
+          return;
         }
+        // the canvas: width and height (16 bits, little endian), RGB row by row
+        const width = data[0] | (data[1] << 8), height = data[2] | (data[3] << 8);
+        if (width && height && data.length >= 4 + width * height * 3) onPixels(data, width, height);
       };
       socket.onclose = () => {
         onState(document.hidden ? "paused" : "no preview (more than 4 open, or the connection closed)");

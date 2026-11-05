@@ -25,13 +25,11 @@
 //                             speed=0..255, clock_24h=1|0; answers like GET /api/leds
 //   GET  /api/leds/live       a WebSocket: binary messages of the canvas as drawn (before the
 //                             brightness), 4 bytes width and height (16 bits each, little endian),
-//                             then RGB row by row; 10 a second, 5 for a canvas over 4096 pixels.
-//                             With an audio input 20 a second, the ones between with 0 x 0 (no
-//                             pixels); every message then ends with the sound: flags (1 active,
-//                             2 beat), loudness, the 32 bands
-//   GET  /api/leds/live?audio the same socket for the sound alone (the Sound page): only the
-//                             messages of 0 x 0 with the sound, 20 a second; nothing without an
-//                             audio input
+//                             then RGB row by row; 10 a second, 5 for a canvas over 4096 pixels;
+//                             nothing else (the Control page)
+//   GET  /api/leds/live?audio the sound instead (the Sound page): binary messages of 34 bytes,
+//                             flags (1 active, 2 beat), loudness, the 32 bands; 20 a second,
+//                             nothing without an audio input. Both share the 4 watchers
 //
 // Only in the main firmware: main registers the routes (webserver::Config::add_routes).
 
@@ -562,100 +560,58 @@ esp_err_t post_overlay(httpd_req_t *req)
 
 // ------------------------------------------------------------------------- the live preview
 
-// The WebSockets of /api/leds/live: a timer queues a send on the server's task, which copies the
-// canvas (leds::preview) and the sound and sends them to each of them. The server's own task
-// only: no lock.
+// The WebSockets of /api/leds/live: a timer queues a send on the server's task every 50 ms. A
+// watcher of the canvas gets the pixels (leds::preview) every second tick, a watcher of the sound
+// (`?audio`) the sound every tick; each only its own. The server's own task only: no lock.
 constexpr size_t kMaxLive = 4;
-// the sound at the end of a message: flags, loudness, the bands
-constexpr size_t kAudioSize = 2 + effects::kBands;
+// a message of the sound: flags, loudness, the bands
+constexpr size_t kSoundSize = 2 + effects::kBands;
 httpd_handle_t g_server = nullptr;
 int g_live[kMaxLive] = {-1, -1, -1, -1};
-// a watcher that asked for the sound alone (`?audio`): no pixels
-bool g_live_audio_only[kMaxLive] = {};
+// a watcher of the sound (`?audio`), else of the canvas
+bool g_live_sound[kMaxLive] = {};
 esp_timer_handle_t g_live_timer = nullptr;
 uint32_t g_live_ticks = 0;
 uint8_t *g_live_buffer = nullptr;
 size_t g_live_size = 0;
 void (*g_audio)(effects::Audio &out) = nullptr;
 
-// the sound after `length` bytes of the message; the new length
-size_t add_audio(size_t length)
+// the message to every watcher of the sound (`sound`) or of the canvas; one whose send fails is
+// let go
+void send_to(bool sound, const uint8_t *payload, size_t length)
 {
-    if (g_audio == nullptr) {
-        return length;
-    }
-    effects::Audio audio{};
-    g_audio(audio);
-    uint8_t *out = g_live_buffer + length;
-    out[0] = static_cast<uint8_t>((audio.active ? 1 : 0) | (audio.beat ? 2 : 0));
-    out[1] = audio.loudness;
-    std::memcpy(out + 2, audio.bands, effects::kBands);
-    return length + kAudioSize;
-}
-
-// the message in the buffer to every watcher of the canvas; `length` 0: none for them. Then the
-// sound alone (its last bytes, after 0 x 0) to every watcher of the sound
-void send_frame(size_t length)
-{
-    static uint8_t sound[4 + kAudioSize];
-    const bool with_sound = g_audio != nullptr && length >= kAudioSize;
-    if (with_sound) {
-        std::memset(sound, 0, 4);
-        std::memcpy(sound + 4, g_live_buffer + length - kAudioSize, kAudioSize);
-    }
     httpd_ws_frame_t frame{};
     frame.type = HTTPD_WS_TYPE_BINARY;
+    frame.payload = const_cast<uint8_t *>(payload);
+    frame.len = length;
     for (size_t i = 0; i < kMaxLive; i++) {
         int &fd = g_live[i];
-        if (fd < 0) {
-            continue;
-        }
-        if (g_live_audio_only[i]) {
-            if (!with_sound) {
-                continue;
-            }
-            frame.payload = sound;
-            frame.len = sizeof(sound);
-        } else {
-            if (length == 0) {
-                continue;
-            }
-            frame.payload = g_live_buffer;
-            frame.len = length;
-        }
-        if (httpd_ws_send_frame_async(g_server, fd, &frame) != ESP_OK) {
+        if (fd >= 0 && g_live_sound[i] == sound && httpd_ws_send_frame_async(g_server, fd, &frame) != ESP_OK) {
             fd = -1;
         }
     }
 }
 
-void send_live(void *)
+void send_sound()
 {
-    size_t open = 0, canvas = 0;
-    for (size_t i = 0; i < kMaxLive; i++) {
-        int &fd = g_live[i];
-        if (fd >= 0 && httpd_ws_get_fd_info(g_server, fd) != HTTPD_WS_CLIENT_WEBSOCKET) {
-            fd = -1; // closed, or the number taken by another connection
-        }
-        open += fd >= 0 ? 1 : 0;
-        canvas += fd >= 0 && !g_live_audio_only[i] ? 1 : 0;
-    }
-    if (open == 0) {
-        esp_timer_stop(g_live_timer);
-        memory::release_large(g_live_buffer);
-        g_live_buffer = nullptr;
-        g_live_size = 0;
-        return;
-    }
+    effects::Audio audio{};
+    g_audio(audio);
+    static uint8_t message[kSoundSize];
+    message[0] = static_cast<uint8_t>((audio.active ? 1 : 0) | (audio.beat ? 2 : 0));
+    message[1] = audio.loudness;
+    std::memcpy(message + 2, audio.bands, effects::kBands);
+    send_to(true, message, sizeof(message));
+}
+
+// the canvas every second tick (10 a second), a large one every fourth
+void send_canvas()
+{
     const leds::Status s = leds::status();
-    // the pixels only for a watcher of the canvas
-    const size_t pixels = canvas > 0 ? static_cast<size_t>(s.width) * s.height : 0;
-    // the canvas every other tick (10 a second), a large one every fourth; the sound every tick
-    bool with_pixels = pixels > 0 && g_live_ticks++ % (pixels > 4096 ? 4 : 2) == 0;
-    if (!with_pixels && g_audio == nullptr) {
+    const size_t pixels = static_cast<size_t>(s.width) * s.height;
+    if (pixels == 0 || g_live_ticks++ % (pixels > 4096 ? 4 : 2) != 0) {
         return;
     }
-    const size_t size = 4 + pixels * 3 + kAudioSize;
+    const size_t size = 4 + pixels * 3;
     if (g_live_size < size) {
         memory::release_large(g_live_buffer);
         g_live_buffer = static_cast<uint8_t *>(memory::allocate_large(size));
@@ -665,21 +621,45 @@ void send_live(void *)
         }
     }
     uint16_t width = 0, height = 0;
-    if (with_pixels && !leds::preview(g_live_buffer + 4, g_live_size - 4 - kAudioSize, width, height)) {
-        // the task copies from its next frame on
-        with_pixels = false;
-        width = height = 0;
-        if (g_audio == nullptr) {
-            return;
-        }
+    if (!leds::preview(g_live_buffer + 4, g_live_size - 4, width, height) || width == 0 || height == 0) {
+        return; // the task copies from its next frame on
     }
     g_live_buffer[0] = static_cast<uint8_t>(width);
     g_live_buffer[1] = static_cast<uint8_t>(width >> 8);
     g_live_buffer[2] = static_cast<uint8_t>(height);
     g_live_buffer[3] = static_cast<uint8_t>(height >> 8);
-    // a watcher of the canvas gets a message of 0 x 0 only with the sound (as before)
-    const size_t length = add_audio(4 + static_cast<size_t>(width) * height * 3);
-    send_frame(length > 4 ? length : 0);
+    send_to(false, g_live_buffer, 4 + static_cast<size_t>(width) * height * 3);
+}
+
+void send_live(void *)
+{
+    size_t canvas = 0, sound = 0;
+    for (size_t i = 0; i < kMaxLive; i++) {
+        int &fd = g_live[i];
+        if (fd >= 0 && httpd_ws_get_fd_info(g_server, fd) != HTTPD_WS_CLIENT_WEBSOCKET) {
+            fd = -1; // closed, or the number taken by another connection
+        }
+        canvas += fd >= 0 && !g_live_sound[i] ? 1 : 0;
+        sound += fd >= 0 && g_live_sound[i] ? 1 : 0;
+    }
+    if (canvas + sound == 0) {
+        esp_timer_stop(g_live_timer);
+        memory::release_large(g_live_buffer);
+        g_live_buffer = nullptr;
+        g_live_size = 0;
+        return;
+    }
+    if (sound > 0 && g_audio != nullptr) {
+        send_sound();
+    }
+    if (canvas > 0) {
+        send_canvas();
+    } else if (g_live_buffer != nullptr) {
+        // the canvas' buffer only while someone watches it
+        memory::release_large(g_live_buffer);
+        g_live_buffer = nullptr;
+        g_live_size = 0;
+    }
 }
 
 void on_live_timer(void *)
@@ -705,7 +685,7 @@ esp_err_t live_post_handshake(httpd_req_t *req)
         return ESP_FAIL; // enough watchers
     }
     *slot = fd;
-    g_live_audio_only[slot - g_live] = std::strstr(req->uri, "?audio") != nullptr;
+    g_live_sound[slot - g_live] = std::strstr(req->uri, "?audio") != nullptr;
     g_server = req->handle;
     if (g_live_timer == nullptr) {
         esp_timer_create_args_t args{};

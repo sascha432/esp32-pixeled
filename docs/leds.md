@@ -138,9 +138,10 @@ hand it a frame, get a callback when it is out. Behind it one backend per chip:
   (section 10).
 * **Live preview** (built 2026-10-21): while someone asks (`leds::preview`, the web page's
   WebSocket), the task copies the canvas after the overlay, before the brightness. The socket
-  (`components/leds_api`) sends 20 messages a second: the canvas in every second one (every fourth
-  for more than 4096 pixels), with an audio input the sound at the end of each (flags, loudness,
-  the 32 bands; main hands `leds_api::register_routes` a getter on `audio::status`). ESP-IDF 6.1
+  (`components/leds_api`) ticks 20 times a second: a viewer of the canvas gets it every second
+  tick (every fourth for more than 4096 pixels), a viewer of the sound (`?audio`, the Sound page)
+  the sound every tick (flags, loudness, the 32 bands; main hands `leds_api::register_routes` a
+  getter on `audio::status`); each gets only its own. ESP-IDF 6.1
   answers the handshake without calling the route's handler: the login is checked in the
   pre-handshake callback and the viewer taken in the post-handshake one.
 * **Memory**: 8192 pixels x 3 bytes = 24 KB per canvas; a second canvas for the crossfade

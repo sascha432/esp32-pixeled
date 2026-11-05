@@ -228,23 +228,33 @@ class LiveSocket:
 
 
 def preview_test(device: str, cookie: str, features: list[str]) -> None:
-    """The LED preview socket: a plain one gets the canvas, one with ?audio (the Sound page) only the
-    sound, 0 x 0 and 34 bytes, never pixels."""
+    """The LED preview socket: a plain one gets the canvas alone (4 bytes width and height, then
+    RGB), one with ?audio (the Sound page) the sound alone (34 bytes), never pixels."""
     if "leds" not in features:
         print("  (no LEDs: preview socket skipped)")
         return
     plain = LiveSocket(device, cookie, "/api/leds/live")
+    start = time.time()
     frames = [plain.binary(2) for _ in range(6)]
+    took = time.time() - start
     plain.close()
-    check(any(f and len(f) > 4 + 34 and (f[0] | f[1] << 8) > 0 for f in frames), "the preview socket sends the canvas",
-          str([len(f) if f else None for f in frames]))
+    got = [f for f in frames if f is not None]
+    sizes = [len(f) for f in got]
+
+    def canvas(f: bytes) -> bool:
+        width, height = f[0] | f[1] << 8, f[2] | f[3] << 8
+        return width > 0 and height > 0 and len(f) == 4 + width * height * 3
+
+    check(len(got) == 6 and all(canvas(f) for f in got), "the preview socket sends the canvas alone", str(sizes))
+    # 10 a second (5 for a large canvas): 6 take at least 0.4 s, sound frames between would not
+    check(took >= 0.4, "the canvas at most 10 a second", f"{took:.2f} s for 6")
     sound = LiveSocket(device, cookie, "/api/leds/live?audio")
     frames = [sound.binary(1) for _ in range(10)]
     sound.close()
     if "audio" in features:
         got = [f for f in frames if f is not None]
-        check(len(got) >= 8 and all(len(f) == 4 + 34 and f[:4] == bytes(4) for f in got),
-              "the sound-only socket sends 38 byte frames, 20 a second", str([len(f) for f in got][:10]))
+        check(len(got) >= 8 and all(len(f) == 34 for f in got),
+              "the sound-only socket sends 34 byte frames, 20 a second", str([len(f) for f in got][:10]))
     else:
         check(all(f is None for f in frames), "the sound-only socket sends nothing without audio")
 

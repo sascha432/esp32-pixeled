@@ -9,6 +9,13 @@ and what is gone under Removed. Updated in the same commit as the change ([CLAUD
 
 ### 2026-11-04
 
+Changed
+
+* `GET /api/leds/live`: the preview's socket sends the canvas alone, 10 a second (5 for one over
+  4096 pixels); the sound at the end of each message and the 38-byte sound messages between
+  them are gone (nothing read them since the LEDs page was split). `?audio` sends the sound
+  alone as 34 bytes, without the empty 0 x 0 header.
+
 Fixed
 
 * ESP32-S3: the recovery app starts again when the PSRAM fails. mbedTLS allocated from PSRAM there

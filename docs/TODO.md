@@ -6,6 +6,10 @@ outputs with their DMA ring; phase 6 has the microphone, WARLS and WLED audio sy
 4 has 13 animations, the crossfade, palettes and presets; phase 7 the buttons and the encoder;
 phase 8 the live preview and the overlay ([leds.md](leds.md) section 11).
 
+State 2026-11-04: the preview socket split like the pages, the canvas alone for Control and the
+sound alone for Sound (`/api/leds/live?audio`, 34 bytes); flashed on the WLED controller rev 1.1
+(COM7). Open: `tools/test_web.py` there (the login), Control and Sound looked at in the browser.
+
 State 2026-11-03: the LEDs page split into Control, Sound, LED settings and Buttons, the menu as an
 icon rail and a phone tab bar, `features` in `/api/status`, the sound-only preview socket; main,
 recovery app and web image flashed on the test board, the recovery app's menu (Wi-Fi, Hotspot,
