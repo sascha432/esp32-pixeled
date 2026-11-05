@@ -4,6 +4,7 @@
 #include <vector>
 
 #include "check.hpp"
+#include "internal.hpp"
 #include "px/effects/effects.hpp"
 
 using namespace px::effects;
@@ -612,4 +613,205 @@ TEST(effects_palette_changes_the_colors)
         render(find("fire"), fire_canvas, params, ms);
     }
     CHECK(same(fire_canvas.at(0, 0), {0, 0, 0}) || fire_canvas.at(0, 0).b < 40);
+}
+
+namespace {
+
+// the animations after WLED's 2D ones (particles.cpp, distortion waves); the two GEQs need sound
+constexpr const char *kWledAnimations[] = {"colored-bursts", "blobs",          "distortion-waves", "waverly",
+                                           "ps-vortex",      "ps-fuzzy-noise", "ps-waterfall",     "ps-ghost-rider",
+                                           "ps-blobs",       "ps-galaxy"};
+constexpr const char *kGeqAnimations[] = {"ps-geq-2d", "ps-geq-nova"};
+
+// music: loud, every band, a beat every half second
+Audio music(uint32_t ms)
+{
+    Audio audio;
+    audio.active = true;
+    audio.loudness = 230;
+    for (size_t b = 0; b < kBands; b++) {
+        audio.bands[b] = static_cast<uint8_t>(160 + (b * 7 + ms / 20) % 96);
+    }
+    audio.beat = ms % 500 == 0;
+    return audio;
+}
+
+bool any_differs(const std::vector<Rgb> &a, const std::vector<Rgb> &b)
+{
+    for (size_t i = 0; i < a.size(); i++) {
+        if (!same(a[i], b[i])) {
+            return true;
+        }
+    }
+    return false;
+}
+
+} // namespace
+
+TEST(effects_wled_animations_draw_and_move)
+{
+    for (const char *slug : kWledAnimations) {
+        REQUIRE(find(slug) < count());
+        CHECK(info(find(slug))->reactive == Reactive::Optional);
+        CHECK(find(slug) < animation_count());
+        Owned o(24, 32);
+        Params params;
+        params.color = {0, 200, 60};
+        std::vector<Rgb> before;
+        uint32_t light = 0;
+        for (uint32_t ms = 0; ms <= 3000; ms += 20) {
+            render(find(slug), o.canvas, params, ms);
+            if (ms == 2000) {
+                before = o.pixels;
+            }
+            light += ms >= 2000 ? brightness_sum(o.canvas) : 0;
+        }
+        if (light < 2000) {
+            std::printf("%s stays dark\n", slug);
+        }
+        CHECK(light >= 2000);
+        CHECK(any_differs(before, o.pixels));
+        // a strip, a single LED, odd sizes turned every way, too little memory: no crash
+        Owned strip(40, 1), one(1, 1), odd(7, 5);
+        std::vector<uint8_t> small(memory_size(24, 32) - 1);
+        Canvas starved{24, 32, o.pixels.data(), small.data(), small.size()};
+        for (uint32_t ms = 0; ms <= 600; ms += 20) {
+            params.rotation = static_cast<uint8_t>(ms / 150);
+            const Audio audio = music(ms);
+            params.audio = ms > 300 ? &audio : nullptr;
+            params.reactive = true;
+            render(find(slug), strip.canvas, params, ms);
+            render(find(slug), one.canvas, params, ms);
+            render(find(slug), odd.canvas, params, ms);
+            render(find(slug), starved, params, ms);
+        }
+    }
+}
+
+TEST(effects_wled_animations_follow_the_sound)
+{
+    Audio quiet;
+    quiet.active = true;
+    for (const char *slug : kWledAnimations) {
+        Owned a(24, 32), b(24, 32);
+        Params params;
+        params.reactive = true;
+        uint32_t sum_a = 0, sum_b = 0;
+        for (uint32_t ms = 0; ms <= 3000; ms += 20) {
+            const Audio loud = music(ms);
+            params.audio = &loud;
+            render(find(slug), a.canvas, params, ms);
+            params.audio = &quiet;
+            render(find(slug), b.canvas, params, ms);
+            if (ms >= 1000) {
+                sum_a += brightness_sum(a.canvas);
+                sum_b += brightness_sum(b.canvas);
+            }
+        }
+        if (sum_a <= sum_b * 3 / 2) {
+            std::printf("%s: with music %u, quiet %u\n", slug, sum_a, sum_b);
+        }
+        CHECK(sum_a > sum_b * 3 / 2);
+    }
+}
+
+TEST(effects_wled_animations_stand_still_at_speed_0)
+{
+    for (const char *slug : kWledAnimations) {
+        Owned o(16, 16);
+        Params params;
+        params.speed = 0;
+        render(find(slug), o.canvas, params, 1000);
+        const std::vector<Rgb> first = o.pixels;
+        for (uint32_t ms = 1020; ms <= 3000; ms += 20) {
+            render(find(slug), o.canvas, params, ms);
+        }
+        CHECK(!any_differs(first, o.pixels));
+        // a picture, not a dark canvas
+        CHECK(brightness_sum(o.canvas) > 0);
+    }
+}
+
+TEST(effects_geq_animations_need_the_bands)
+{
+    for (const char *slug : kGeqAnimations) {
+        REQUIRE(find(slug) < count());
+        CHECK(info(find(slug))->reactive == Reactive::Required);
+        Owned loud(24, 32), silent(24, 32);
+        Audio nothing;
+        nothing.active = true;
+        Params params;
+        uint32_t sum_loud = 0;
+        for (uint32_t ms = 0; ms <= 2000; ms += 20) {
+            const Audio audio = music(ms);
+            params.audio = &audio;
+            render(find(slug), loud.canvas, params, ms);
+            params.audio = &nothing;
+            render(find(slug), silent.canvas, params, ms);
+            sum_loud += ms >= 1000 ? static_cast<uint32_t>(lit_count(loud.canvas)) : 0u;
+        }
+        CHECK(sum_loud > 50 * 30);
+        // silent and without audio: only the dim sign that it runs (a line at the bottom, a dot in
+        // the middle), at most a row
+        Owned none(24, 32);
+        params.audio = nullptr;
+        for (uint32_t ms = 0; ms <= 200; ms += 20) {
+            render(find(slug), none.canvas, params, ms);
+        }
+        for (const Owned *o : {&silent, &none}) {
+            CHECK(brightness_sum(o->canvas) > 0);
+            CHECK(brightness_sum(o->canvas) <= 24u * 3u * 40u);
+        }
+    }
+}
+
+TEST(effects_geq_2d_shoots_from_the_columns_of_its_bands)
+{
+    // the bass loud, the treble silent: the left half lights, the right stays dark
+    Audio audio;
+    audio.active = true;
+    audio.loudness = 200;
+    for (size_t b = 0; b < kBands / 2; b++) {
+        audio.bands[b] = 255;
+    }
+    Owned o(32, 16);
+    Params params;
+    params.audio = &audio;
+    uint32_t left = 0, right = 0;
+    for (uint32_t ms = 0; ms <= 2000; ms += 20) {
+        render(find("ps-geq-2d"), o.canvas, params, ms);
+        for (uint16_t y = 0; y < 16; y++) {
+            for (uint16_t x = 0; x < 12; x++) {
+                const Rgb l = o.canvas.at(x, y);
+                const Rgb r = o.canvas.at(static_cast<uint16_t>(31 - x), y);
+                left += l.r + l.g + l.b;
+                right += r.r + r.g + r.b;
+            }
+        }
+    }
+    CHECK(left > 10000);
+    CHECK(left > right * 4);
+    // the particles go up: some light in the top half
+    uint32_t top = 0;
+    for (uint32_t ms = 2020; ms <= 2400; ms += 20) {
+        render(find("ps-geq-2d"), o.canvas, params, ms);
+        for (uint16_t y = 0; y < 8; y++) {
+            for (uint16_t x = 0; x < 16; x++) {
+                top += o.canvas.at(x, y).r + o.canvas.at(x, y).g + o.canvas.at(x, y).b;
+            }
+        }
+    }
+    CHECK(top > 0);
+}
+
+TEST(effects_sin16_has_the_shape_of_a_sine)
+{
+    CHECK(detail::sin16(0) == 0);
+    CHECK(detail::sin16(16384) == 32767);
+    CHECK(detail::sin16(32768) == 0);
+    CHECK(detail::sin16(49152) == -32767);
+    // 45 degrees: 23170
+    CHECK(detail::sin16(8192) > 23160 && detail::sin16(8192) < 23180);
+    // 30 degrees: 16383, between two table entries
+    CHECK(detail::sin16(5461) > 16360 && detail::sin16(5461) < 16400);
 }

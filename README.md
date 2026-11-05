@@ -37,6 +37,8 @@ Built:
   meteor, ripple, matrix rain, noise, spectrum; crossfade between animations; brightness with
   fade, gamma, power limit with an adjustable model, the LED supply switched with a settle time;
   stored and restored.
+* Animations after WLED's 2D ones: colored bursts, blobs, distortion waves, waverly and the
+  particle ones PS vortex, fuzzy noise, waterfall, GEQ 2D, GEQ nova, ghost rider, blobs, galaxy.
 * Each animation turns by 0, 90, 180 or 270 degrees; all but solid react to sound with their own
   switch, strength, attack and release.
 * Palettes for the animations with colors of their own (rainbow, party, ocean, forest, lava,

@@ -6,9 +6,11 @@
 #include <cstring>
 #include <iterator>
 
+#include "internal.hpp"
+
 namespace px::effects {
 
-namespace {
+namespace detail {
 
 // speed 0..255 as a phase step per millisecond in 1/65536 of a full turn: 255 is about two turns
 // per second, 1 about one turn in two minutes
@@ -17,51 +19,12 @@ uint32_t per_ms(uint8_t speed)
     return static_cast<uint32_t>(speed) * speed * 2 / 255 + (speed > 0 ? 1 : 0);
 }
 
-uint32_t phase(uint32_t ms, uint8_t speed, uint32_t scale = 1)
+uint32_t phase(uint32_t ms, uint8_t speed, uint32_t scale)
 {
     return ms * per_ms(speed) * scale;
 }
 
 // ------------------------------------------------------------------ memory between frames
-
-// ripple: a ring growing from where it started
-struct Ring {
-    bool on;
-    uint8_t hue;
-    uint16_t x;
-    uint16_t y;
-    // 1/16 pixel
-    uint32_t radius;
-};
-
-constexpr size_t kRings = 8;
-
-// The start of Canvas::memory, the same for every animation; the cells (fire's heat, one byte per
-// pixel) follow it.
-struct Memory {
-    bool started;
-    uint32_t last_ms;
-    // the phase of the reactive animations: their speed follows the sound
-    uint32_t phase;
-    // fire, twinkle, matrix, ripple: milliseconds toward the next step
-    uint32_t carry;
-    uint32_t random;
-    // the sound, smoothed, the flash of the last beat and how much sound there is (fading in and
-    // out, so silence and sound do not snap; all 0..255 x 256)
-    uint32_t level;
-    uint32_t pulse;
-    uint32_t presence;
-    // the hue the beats moved the colors on (x 256): where it glides to and where it is
-    uint32_t hue_target;
-    uint32_t hue;
-    // the bands, smoothed with the attack and release (0..255 x 256)
-    uint16_t bands[kBands];
-    // color fade: the hue the beats added; meteor: the head's way in 1/256 pixel
-    uint32_t offset;
-    Ring rings[kRings];
-};
-
-constexpr size_t kHeader = (sizeof(Memory) + 7) & ~size_t{7};
 
 Memory *memory_of(Canvas &canvas)
 {
@@ -76,7 +39,6 @@ uint8_t *cells_of(Canvas &canvas)
     return canvas.memory + kHeader;
 }
 
-// the milliseconds since the last frame, at most 100 (0 for the first)
 uint32_t elapsed(Memory &m, uint32_t ms)
 {
     if (!m.started) {
@@ -106,50 +68,27 @@ uint16_t random16(Memory &m)
     return static_cast<uint16_t>(random8(m) << 8 | random8(m));
 }
 
-// 0 .. limit - 1
 uint8_t random_below(Memory &m, uint32_t limit)
 {
     return limit == 0 ? 0 : static_cast<uint8_t>(random8(m) * limit >> 8);
 }
 
-// `value` (x 256) toward `target` (x 256): up within `attack` ms, down within `release` (0: at once)
-template <class T>
-void follow(T &value, uint32_t target, uint32_t dt, uint16_t attack, uint16_t release)
-{
-    const uint32_t v = value;
-    if (target > v) {
-        value = static_cast<T>(dt >= attack ? target : v + (target - v) * dt / attack);
-    } else if (target < v) {
-        value = static_cast<T>(dt >= release ? target : v - (v - target) * dt / release);
-    }
-}
-
-// a value of the audio (0..255) times the strength (128: as it is), at most 255
 uint8_t scaled(uint32_t value, uint8_t strength)
 {
     const uint32_t v = value * strength / 128u;
     return static_cast<uint8_t>(v > 255 ? 255 : v);
 }
 
-// the brightness of a reactive animation from the sound's level: never darker than a quarter
 uint8_t value_of(uint8_t level)
 {
     return static_cast<uint8_t>(64 + level * 191u / 255u);
 }
 
-// What a reactive animation hears (docs/leds.md section 6.2): `on` while there is sound; `level`
-// the loudness smoothed (up within the attack, 20 ms by default, down within the release, a
-// quarter second) times the strength; `beat` this frame (the beat's flash, `Memory::pulse`, is
-// breathe's); `drive` the smoothed loudness alone, for the speed; `value` the brightness: from the
-// level with sound, full in silence, gliding between the two (in 100 ms, out in 1 s). Without a
-// source an animation runs as it does without audio.
-struct Sound {
-    bool on;
-    uint8_t level;
-    bool beat;
-    uint8_t drive;
-    uint8_t value;
-};
+uint8_t with_sound(const Memory &m, uint8_t level)
+{
+    const uint32_t presence = m.presence >> 8;
+    return static_cast<uint8_t>(255u - presence * (255u - value_of(level)) / 255u);
+}
 
 Sound listen(Memory &m, const Params &params, uint32_t dt)
 {
@@ -165,20 +104,16 @@ Sound listen(Memory &m, const Params &params, uint32_t dt)
     follow(m.level, on ? audio->loudness * 256u : 0u, dt, params.attack_ms, params.release_ms);
     follow(m.presence, on ? 255u * 256u : 0u, dt, 100, 1000);
     const uint8_t heard = scaled(m.level >> 8, params.strength);
-    const uint32_t presence = m.presence >> 8;
-    const auto value = static_cast<uint8_t>(255u - presence * (255u - value_of(heard)) / 255u);
-    return {on, heard, on && audio->beat, static_cast<uint8_t>(m.level >> 8), value};
+    return {on, heard, on && audio->beat, static_cast<uint8_t>(m.level >> 8), with_sound(m, heard)};
 }
 
-// The speed with the sound in 1/64 of the speed without it: the smoothed loudness (without the
-// beat's flash, so attack and release decide how it changes, and falling with the release in
-// silence) times the strength; at most 1.5 times as fast at strength 128, twice at 255
+// the smoothed loudness (without the beat's flash, so attack and release decide how it changes,
+// and falling with the release in silence) times the strength
 uint32_t faster(const Sound &sound, uint8_t strength)
 {
     return 64u + sound.drive * strength / 1020u;
 }
 
-// The hue the beats moved the colors on: `step` per beat, glided to in 250 ms, no jump
 uint8_t beat_hue(Memory &m, const Sound &sound, uint32_t dt, uint32_t step)
 {
     m.hue_target += sound.beat ? step << 8 : 0u;
@@ -187,8 +122,6 @@ uint8_t beat_hue(Memory &m, const Sound &sound, uint32_t dt, uint32_t step)
     return static_cast<uint8_t>(m.hue >> 8);
 }
 
-// The bands an animation hears: smoothed with the attack and release in the memory, times the
-// strength. In silence they fall with the release. Without memory as they came.
 void hear_bands(Memory *m, const Params &params, uint32_t dt, uint8_t (&out)[kBands])
 {
     const Audio *audio = params.audio;
@@ -227,8 +160,6 @@ Rgb scale(Rgb c, uint32_t value)
             static_cast<uint8_t>(c.b * value / 255)};
 }
 
-// The color of a hue at `value`: the hue circle without a palette, else the palette's color at that
-// place (docs/leds.md section 6.4)
 Rgb paint(const Params &params, uint8_t hue, uint8_t saturation, uint8_t value)
 {
     return params.palette == 0 ? hsv(hue, saturation, value)
@@ -239,6 +170,43 @@ void clear(Canvas &canvas)
 {
     std::memset(canvas.pixels, 0, static_cast<size_t>(canvas.width) * canvas.height * sizeof(Rgb));
 }
+
+namespace {
+
+// sin(i * pi / 128) * 32767, a quarter wave
+constexpr int32_t kSine[65] = {
+    0,     804,   1608,  2410,  3212,  4011,  4808,  5602,  6393,  7179,  7962,  8739,  9512,
+    10278, 11039, 11793, 12539, 13279, 14010, 14732, 15446, 16151, 16846, 17530, 18204, 18868,
+    19519, 20159, 20787, 21403, 22005, 22594, 23170, 23731, 24279, 24811, 25329, 25832, 26319,
+    26790, 27245, 27683, 28105, 28510, 28898, 29268, 29621, 29956, 30273, 30571, 30852, 31113,
+    31356, 31580, 31785, 31971, 32137, 32285, 32412, 32521, 32609, 32678, 32728, 32757, 32767,
+};
+
+} // namespace
+
+int32_t sin16(uint32_t angle)
+{
+    angle &= 0xffffu;
+    const uint32_t quarter = angle >> 14;
+    uint32_t a = angle & 0x3fffu;
+    // the second and fourth quarter run back: 1..16384
+    a = (quarter & 1u) != 0 ? 16384u - a : a;
+    const uint32_t i = a >> 8;
+    const auto f = static_cast<int32_t>(a & 255u);
+    const int32_t v = i >= 64 ? kSine[64] : kSine[i] + ((kSine[i + 1] - kSine[i]) * f >> 8);
+    return (quarter & 2u) != 0 ? -v : v;
+}
+
+int32_t cos16(uint32_t angle)
+{
+    return sin16(angle + 16384u);
+}
+
+} // namespace detail
+
+namespace {
+
+using namespace detail;
 
 // ------------------------------------------------------------------------------ animations
 
@@ -736,6 +704,63 @@ void noise(Canvas &canvas, const Params &params, uint32_t ms)
     }
 }
 
+// Distortion waves (after WLED's): red, green and blue each a wave running out in rings from its
+// own point, the points wandering over the canvas, every wave bent by sines along x and y; where
+// they meet the colors mix. The canvas' longer side is 32 units, so a larger canvas shows the same
+// picture. Reactive: faster and brighter with the sound, a beat shifts the waves.
+void distortion_waves(Canvas &canvas, const Params &params, uint32_t ms)
+{
+    Sound sound;
+    uint32_t dt = 0;
+    const uint32_t t = reactive_phase(canvas, params, ms, sound, dt);
+    uint32_t shift = 0;
+    if (Memory *m = params.audio != nullptr ? memory_of(canvas) : nullptr) {
+        shift = beat_hue(*m, sound, dt, 48u * params.strength / 128u);
+    }
+    const uint16_t w = canvas.width;
+    const uint16_t h = canvas.height;
+    // a pixel in 1/16 unit
+    const uint32_t longer = w > h ? w : h;
+    const uint32_t unit = 512u / longer > 0 ? 512u / longer : 1u;
+    // at speed 128 the waves run out about half a turn a second, the points go around in 8 s; each
+    // wave and point at its own pace (from the whole phase, so nothing jumps where a byte wraps)
+    const uint32_t run = t >> 10;
+    const uint32_t slow = t >> 12;
+    const auto a = static_cast<uint8_t>(run + shift);
+    const auto a2 = static_cast<uint8_t>(t >> 11);
+    const auto a3 = static_cast<uint8_t>(slow);
+    int32_t cx[3];
+    int32_t cy[3];
+    uint8_t wave[3];
+    for (uint32_t k = 0; k < 3; k++) {
+        // the points in 1/16 unit, each on its own path
+        cx[k] = static_cast<int32_t>(sin8(static_cast<uint8_t>(slow * (k + 2) / 2 + k * 85)) * w * unit / 256u);
+        cy[k] = static_cast<int32_t>(sin8(static_cast<uint8_t>(slow * (4 - k) / 3 + k * 40 + 64)) * h * unit / 256u);
+        wave[k] = static_cast<uint8_t>(run * (k + 2) / 2 + shift);
+    }
+    for (uint16_t y = 0; y < h; y++) {
+        const auto uy = static_cast<int32_t>(y * unit);
+        for (uint16_t x = 0; x < w; x++) {
+            const auto ux = static_cast<int32_t>(x * unit);
+            uint8_t v[3];
+            for (uint32_t k = 0; k < 3; k++) {
+                // the bend: two sines along x and y, through a third
+                const auto bend = static_cast<uint8_t>(
+                    sin8(static_cast<uint8_t>(sin8(static_cast<uint8_t>((ux >> 2) + a + k * 40)) +
+                                              sin8(static_cast<uint8_t>((uy >> 2) - a2 + k * 70)) + a3)) >>
+                    1);
+                const int32_t dx = ux - cx[k];
+                const int32_t dy = uy - cy[k];
+                // the distance squared in units² / 8: a whole wave 45 units out, the next ones
+                // closer together
+                const auto ring = static_cast<uint32_t>((dx * dx + dy * dy) >> 11);
+                v[k] = sin8(static_cast<uint8_t>(bend + wave[k] - ring));
+            }
+            canvas.at(x, y) = scale({v[0], v[1], v[2]}, sound.value);
+        }
+    }
+}
+
 using RenderFunction = void (*)(Canvas &, const Params &, uint32_t);
 
 struct Entry {
@@ -757,6 +782,19 @@ constexpr Entry kEffects[] = {
     {{"ripple", "Ripple", Reactive::Optional, false, true}, ripple},
     {{"matrix", "Matrix rain", Reactive::Optional, true, false}, matrix},
     {{"noise", "Noise", Reactive::Optional, false, true}, noise},
+    // after WLED's 2D animations of the same names (docs/leds.md section 6.3)
+    {{"colored-bursts", "Colored bursts", Reactive::Optional, false, true}, colored_bursts},
+    {{"blobs", "Blobs", Reactive::Optional, false, true}, blobs},
+    {{"distortion-waves", "Distortion waves", Reactive::Optional, false, false}, distortion_waves},
+    {{"waverly", "Waverly", Reactive::Optional, false, true}, waverly},
+    {{"ps-vortex", "PS vortex", Reactive::Optional, false, true}, ps_vortex},
+    {{"ps-fuzzy-noise", "PS fuzzy noise", Reactive::Optional, false, true}, ps_fuzzy_noise},
+    {{"ps-waterfall", "PS waterfall", Reactive::Optional, false, true}, ps_waterfall},
+    {{"ps-geq-2d", "PS GEQ 2D", Reactive::Required, false, true}, ps_geq_2d},
+    {{"ps-geq-nova", "PS GEQ nova", Reactive::Required, false, true}, ps_geq_nova},
+    {{"ps-ghost-rider", "PS ghost rider", Reactive::Optional, false, true}, ps_ghost_rider},
+    {{"ps-blobs", "PS blobs", Reactive::Optional, false, true}, ps_blobs},
+    {{"ps-galaxy", "PS galaxy", Reactive::Optional, false, true}, ps_galaxy},
     // test patterns last; the index of an animation is stored (the state, the styles): a new one
     // goes before them
     {{"edges", "Test: edges", Reactive::Never, false, false}, edges},
@@ -880,7 +918,10 @@ Rgb palette_color(uint8_t palette, uint8_t index, Rgb color)
 
 size_t memory_size(uint16_t width, uint16_t height)
 {
-    return kHeader + static_cast<size_t>(width) * height;
+    // the cells (a byte per pixel) or the trail with its particles, whichever is larger
+    const size_t cells = static_cast<size_t>(width) * height;
+    const size_t trail = trail_memory_size(width, height);
+    return kHeader + (cells > trail ? cells : trail);
 }
 
 void render(size_t index, Canvas &canvas, const Params &params, uint32_t ms)

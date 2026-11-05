@@ -6,6 +6,15 @@ outputs with their DMA ring; phase 6 has the microphone, WARLS and WLED audio sy
 4 has 13 animations, the crossfade, palettes and presets; phase 7 the buttons and the encoder;
 phase 8 the live preview and the overlay ([leds.md](leds.md) section 11).
 
+State 2026-11-05: twelve animations after WLED's 2D ones (colored bursts, blobs, distortion waves,
+waverly and the particle ones PS vortex, fuzzy noise, waterfall, GEQ 2D, GEQ nova, ghost rider,
+blobs, galaxy; [leds.md](leds.md) section 6.3), host tested and looked at as frames rendered on
+the PC; flashed on the WLED controller rev 1.1 (COM7): each runs at 95 to 100 fps (0.4 to 2.3 ms
+per frame), in silence and with the demo of `tools/audio_send.py` over WARLS (sound heard, the
+GEQs light only with it), turned by a quarter, with a palette, at speed 0; no reset. Their "Reacts
+to sound" is on there; the board is back on fire, brightness 52, WARLS off. Open: how they look on
+the matrix (for the user's eyes).
+
 State 2026-11-04: the preview socket split like the pages, the canvas alone for Control and the
 sound alone for Sound (`/api/leds/live?audio`, 34 bytes); flashed on the WLED controller rev 1.1
 (COM7). Open: `tools/test_web.py` there (the login), Control and Sound looked at in the browser.
@@ -19,6 +28,10 @@ the new pages (needs the login), light mode.
 State 2026-11-02: the web server, the web UI's live socket and the modem sleep rule ported from
 hassctrl, flashed on the test board; `tools/test_web.py` 63 of 63 there, the browser check is
 open (phase 1).
+
+**For the user's eyes (built 2026-11-05):** the twelve animations after WLED's on the matrix, with
+the music and without (Control, the animation list after Noise); WLED's extra sliders are fixed
+values: say where one should be different.
 
 **For the user's eyes (built 2026-10-21, not looked at on the LEDs):** the seven new animations
 (gradient, color fade, twinkle, meteor, ripple, matrix rain, noise) with and without sound, the
@@ -270,6 +283,11 @@ styles take it. Not tried: the factory reset path (it erases the test board's se
 * Crossfade between two animations: built 2026-10-21 (1 s, a setting).
 * The supply off in the panic handler: built 2026-10-21; the pin not measured yet.
 * A test pattern per lane ("light the first LED of each lane") on the layout page.
+* Large layouts on an ESP32 without PSRAM: `memory::allocate_large` aborts when the heap is full,
+  so the render task's "no memory for the frame" and "no memory for the crossfade" never show;
+  the canvas, the frame and the animations' memory (since 2026-11-05 about 4 bytes per pixel plus
+  up to 6 KB, twice in a crossfade) are allocated through it. Measure how many LEDs fit, and let
+  these allocations fail softly.
 * The power model and the panel correction per lane (above).
 * The LED settings show up in the web UI only after a reload when changed from the console or
   Home Assistant: since 2026-11-02 the LED pages' status, the sound input and the presets follow
@@ -306,8 +324,8 @@ styles take it. Not tried: the factory reset path (it erases the test board's se
   page and Home Assistant list "Spectrum" only with a source.
 * The microphone on the S3 and the C chips (I2S0 there, the LEDs use LCD_CAM, RMT or PARLIO).
 * UDP spectrum built 2026-10-21: WARLS and WLED audio sync, tried with `tools/audio_send.py`
-  (the bands arrive). Open: LedFx or a WLED device as the sender; the reactive animations on the
-  LEDs fed by UDP.
+  (the bands arrive). Open: LedFx or a WLED device as the sender. The animations after WLED's ran
+  fed by the WARLS demo on the test board 2026-11-05 (sound heard); the reactions not looked at.
 
 ## Phase 4 and later
 

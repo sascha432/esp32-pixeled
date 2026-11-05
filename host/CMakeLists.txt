@@ -36,6 +36,7 @@ add_executable(px_tests
     ${PX_ROOT}/components/audio/src/packets.cpp
     ${PX_ROOT}/components/config/src/backup.cpp
     ${PX_ROOT}/components/effects/src/effects.cpp
+    ${PX_ROOT}/components/effects/src/particles.cpp
     ${PX_ROOT}/components/effects/src/overlay.cpp
     ${PX_ROOT}/components/formats/src/json_writer.cpp
     ${PX_ROOT}/components/input/src/button.cpp
@@ -54,6 +55,7 @@ target_include_directories(px_tests PRIVATE
     ${PX_ROOT}/components/audio/src
     ${PX_ROOT}/components/config/include
     ${PX_ROOT}/components/effects/include
+    ${PX_ROOT}/components/effects/src
     ${PX_ROOT}/components/formats/include
     ${PX_ROOT}/components/input/src
     ${PX_ROOT}/components/layout/include

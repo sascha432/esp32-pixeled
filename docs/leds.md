@@ -309,9 +309,13 @@ only on a device with an audio source. Built 2026-10-21:
   task when first used) and copies it turned; half a turn reverses the pixels in place. So a
   strip turned by a quarter gets the fire along its length.
 * **Memory between frames:** the render task gives each animation a block
-  (`effects::memory_size`: a small header and a byte per pixel), cleared when the animation, its
-  rotation or the canvas changes. Fire keeps its heat there, the reactive animations their phase,
-  their smoothed level and the beat's flash.
+  (`effects::memory_size`: a small header, then the larger of a byte per pixel and a trail),
+  cleared when the animation, its rotation or the canvas changes. Fire keeps its heat there, the
+  reactive animations their phase, their smoothed level and the beat's flash. The trail (since
+  2026-11-05, for the animations after WLED's, section 6.3) is an RGB canvas of the animation's
+  own (3 bytes per pixel) and its particles (one per three pixels, 48 to 384, 16 bytes each): 6.5 KB
+  for the 768 LEDs of the test matrix, about 30 KB for 8192, twice with the crossfade. On an ESP32
+  without PSRAM this lowers the number of LEDs that fit (to measure).
 * **What an animation hears:** the loudness smoothed with the attack and release (20 and 250 ms
   as built); in silence it falls with the release instead of starting again from 0. The
   brightness comes from it (never below a quarter) while there is sound and is full in silence,
@@ -358,18 +362,48 @@ only on a device with an audio source. Built 2026-10-21:
 | Ripple | optional: a ring on the beat | Built 2026-10-21: rings in rainbow colors from random places, fading as they grow (a new one every 3 to 0.4 s); with sound a ring on every beat |
 | Matrix rain | optional | Built 2026-10-21: drops in the color with a light head and a tail of half the height; with sound each column drops with its band, all on a beat |
 | Spectrum bars | only with audio | color: rainbow, gradient or one color; peaks; VU rows (the three bar animations of `kfc_fw` in one). Built 2026-10-21 as "Spectrum": a rainbow bar per band from the bottom, a narrower canvas shows the loudest band of each group; a dim line while there are no bars |
+| Colored bursts | optional: reach, a beat moves the colors | Built 2026-11-05 (after WLED's): eight rays from a wandering point to ends circling around, dim at the point, a light dot at the end; with sound as long as it is loud |
+| Blobs | optional: a blob per band | Built 2026-11-05 (after WLED's): 3 to 8 discs wandering and bouncing, each growing and shrinking in 4 to 8 s, back elsewhere in another color; with sound each as large as its band, a beat pushes them |
+| Distortion waves | optional | Built 2026-11-05 (after WLED's): red, green and blue each a wave running out from its own wandering point, bent by sines; the longer side is 32 units, so a larger canvas shows the same picture; with sound faster and brighter |
+| Waverly | optional: height | Built 2026-11-05 (after WLED's): noise waves mirrored up and down from the middle row; with sound as high as it is loud |
+| PS vortex | optional: a burst on the beat | Built 2026-11-05 (after WLED's): particles in four spiral arms from the middle, the spin turning round every 3 to 10 s |
+| PS fuzzy noise | optional: a kick on the beat | Built 2026-11-05 (after WLED's): particles drifting in a noise field with friction, bouncing off the edges |
+| PS waterfall | optional: more water, a burst on the beat | Built 2026-11-05 (after WLED's): drops poured from the top, falling, splashing on the floor; in blues |
+| PS GEQ 2D | only with audio | Built 2026-11-05 (after WLED's): particles shot up from the floor, a column per band, the higher and more often the louder; a dim line without sound |
+| PS GEQ nova | only with audio | Built 2026-11-05 (after WLED's): particles shot from the middle in 16 turning directions, one per pair of bands; a dim dot without sound |
+| PS ghost rider | optional: a sharp turn on the beat | Built 2026-11-05 (after WLED's): a rider on a curl, bouncing off the edges, shedding particles that fade and change color as they age |
+| PS blobs | optional: a blob per band | Built 2026-11-05 (after WLED's): 3 to 12 soft blobs drifting, pulsing, pushing each other apart, living 5 to 15 s |
+| PS galaxy | optional: a burst of stars on the beat | Built 2026-11-05 (after WLED's): stars born in two arms that wind out as the galaxy turns, warm white in the middle, blue outside |
 
 The animations with colors of their own take a palette instead (section 6.4). The new
 animations of 2026-10-21 are host tested (they draw, move, follow the sound) and timed on the
 host only; how they look on the matrix is open.
 
+**The animations after WLED's** (2026-11-05, `components/effects/src/particles.cpp`, distortion
+waves in `effects.cpp`): written from WLED's descriptions and pictures, not from its code. Its
+sliders beyond the speed (numbers of lines, blur, trail, gravity and the like) are fixed values
+here; the speed, the palette and the sound settings work as for every animation. All but
+distortion waves draw on a trail of their own (section 6.2, memory): each step it fades and blurs
+a little, then the lines, blobs or particles are drawn, keeping the lighter of the trail and the
+new light (a slow or resting one keeps its color instead of adding up to white). A step is 16 ms
+of the animation's own clock, which the speed turns (0 stands still, 128 as built, 255 almost
+twice as fast) and the sound makes faster (as for rainbow): the same picture at any frame rate.
+At speed 0 the first frame makes a second of steps, so a still picture stands, not a dark one.
+They are made for a matrix; on a strip they run, but show a row of it. Host tested (they draw,
+move, stand still at speed 0, follow the sound; the GEQs need the bands, GEQ 2D left with the
+bass) and looked at as frames rendered on the PC. On the test board (ESP32, 24 x 32) 0.4 to
+2.3 ms per frame, 95 to 100 fps, with the demo of `tools/audio_send.py` and in silence, turned by a
+quarter, with a palette and at speed 0; how they look on the matrix is open.
+
 ### 6.4 Palettes
 
 Built 2026-10-21 (`px/effects/effects.hpp`, host tested). A palette is 16 colors once around a
 circle; the colors between two of them are blended, the last into the first. The animations that
-draw from the hue circle (rainbow, plasma, color fade, noise, ripple, spectrum) take the
-palette's color at the same place instead; fire takes it for its heat, from dark at no heat.
-Solid, breathe, gradient, twinkle, meteor and matrix rain show the color and take none.
+draw from the hue circle (rainbow, plasma, color fade, noise, ripple, spectrum and those after
+WLED's but distortion waves) take the palette's color at the same place instead; fire takes it for
+its heat, from dark at no heat, the galaxy from the middle out (its own colors: warm white to
+blue), the waterfall at random (its own: blues). Solid, breathe, gradient, twinkle, meteor and
+matrix rain show the color and take none; distortion waves has its red, green and blue.
 
 | Palette | Colors |
 | --- | --- |

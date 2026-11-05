@@ -134,14 +134,14 @@ section 3).
 LED, about 10 pictures a second over a WebSocket while the page is open (closed within 3 s after
 leaving it or hiding the tab, opened again when the tab shows it; at most 4 viewers). The card
 "Light": the live controls send on change (a slider while it moves, at most every 150 ms): the
-switch, brightness 1 to 255, the animation (an animation that needs sound, Spectrum, only with an
-audio source), the palette (only for an animation that takes one: "Its own colors", rainbow,
+switch, brightness 1 to 255, the animation (one that needs sound, Spectrum, PS GEQ 2D and PS GEQ
+nova, only with an audio source), the palette (only for an animation that takes one: "Its own colors", rainbow,
 party, ocean, forest, lava, heat, cloud, sunset, pastel, "Shades of the color"), the color (only
 for an animation that uses one, or with the palette made from it) and the speed, then the
 rotation (0, 90, 180, 270 degrees) and "Reacts to sound" (only with an audio source and for an
 animation that can react) with the sliders "Strength" (0 to 255, 128 as built), "Attack" (0 to
 2000 ms, 20 as built) and "Release" (0 to 5000 ms, 250 as built) below it while it is on (always
-for Spectrum); the palette, the rotation and the sound settings belong to the current animation,
+for one that needs sound); the palette, the rotation and the sound settings belong to the current animation,
 each one keeps its own (a hint says so). Below them the state (on with the frames per second, or
 off, or why nothing is shown), "Sound" (hears sound or silence, with an audio source), the
 estimated power with "limited" when the limit dims the frames, the LEDs and lanes, and with a

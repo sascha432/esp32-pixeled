@@ -7,6 +7,22 @@ and what is gone under Removed. Updated in the same commit as the change ([CLAUD
 
 ## Unreleased (0.1.0)
 
+### 2026-11-05
+
+Added
+
+* Twelve animations after WLED's 2D ones, each with the sound switch, strength, attack and
+  release: Colored bursts, Blobs, Distortion waves, Waverly, PS vortex, PS fuzzy noise, PS
+  waterfall, PS GEQ 2D, PS GEQ nova, PS ghost rider, PS blobs, PS galaxy. The two GEQs need sound
+  (listed with an audio source only, like Spectrum); all but Distortion waves take a palette.
+  WLED's extra sliders are fixed values; the speed 0 stands still on a picture.
+
+Changed
+
+* The animations' memory is the larger of a byte per pixel and a trail of 3 bytes per pixel plus
+  up to 384 particles (6 KB): 6.5 KB for 768 LEDs, about 30 KB for 8192, twice during a
+  crossfade. An ESP32 without PSRAM fits fewer LEDs than before.
+
 ### 2026-11-04
 
 Changed
