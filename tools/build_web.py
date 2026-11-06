@@ -11,6 +11,8 @@ references and the web server's content types hold. What happens to the files:
   HTML) are dropped when the firmware's sdkconfig lacks `CONFIG_X=y`: the pages of a board option
   (the SD card, the camera) are not in the image of a board without it. No nesting, no #else. The
   sources stay valid as they are, the markers are comments.
+* The files of an option (OPTION_FILES: scripts.js and glow/ of CONFIG_PX_SCRIPTS) are left out
+  when the firmware lacks it.
 * vendor/*.css (Bootstrap): only the rules whose classes the stripped sources use, plus SAFELIST
   (classes the pages build from a variable, `alert-${kind}`). Rules without a class (:root, the
   dark mode's variables, elements) stay, so do @font-face and the @keyframes still referenced.
@@ -41,6 +43,8 @@ VENDOR = "vendor"
 SAFELIST = (r"^alert-", r"^text-bg-")
 
 MARKER = re.compile(r"^\s*(?://|<!--)\s*#(?:if\s+(CONFIG_\w+)|(endif))\s*(?:-->)?\s*$")
+# the files and directories of an option: not in the image of a firmware without it
+OPTION_FILES = {"scripts.js": "CONFIG_PX_SCRIPTS", "glow/": "CONFIG_PX_SCRIPTS"}
 TOKEN = re.compile(r"[A-Za-z0-9_-]+")
 CLASS = re.compile(r"\.(-?[_a-zA-Z][_a-zA-Z0-9-]*)")
 NESTED_AT = ("@media", "@supports", "@layer", "@container")
@@ -55,6 +59,14 @@ def read_options(sdkconfig: Path) -> set[str]:
     if not sdkconfig.is_file():
         fail(f"{sdkconfig} is missing: build the firmware first")
     return set(re.findall(r"^(CONFIG_\w+)=y$", sdkconfig.read_text(encoding="utf-8"), re.M))
+
+
+def wanted(name: str, options: set[str]) -> bool:
+    """False for a file of an option the firmware lacks (OPTION_FILES)."""
+    for prefix, option in OPTION_FILES.items():
+        if (name == prefix or (prefix.endswith("/") and name.startswith(prefix))) and option not in options:
+            return False
+    return True
 
 
 def strip_conditionals(text: str, options: set[str], name: str) -> str:
@@ -284,7 +296,7 @@ def build(sdkconfig: Path, out: Path) -> list[tuple[str, int, int]]:
     options = read_options(sdkconfig)
     if out.exists():
         shutil.rmtree(out)
-    sources = sorted(p for p in WEB.rglob("*") if p.is_file())
+    sources = sorted(p for p in WEB.rglob("*") if p.is_file() and wanted(p.relative_to(WEB).as_posix(), options))
     built: dict[str, bytes] = {}
     tokens: set[str] = set()
     for source in sources:

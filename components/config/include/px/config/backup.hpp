@@ -52,9 +52,17 @@ struct Report {
 };
 
 // Writes the fields of one section: "  key: value" under the section's "name:".
+// a piece of a file being written (write() with a sink)
+using Sink = void (*)(std::string_view chunk, void *context);
+
 class Writer {
 public:
     explicit Writer(memory::String &out) : _out(out)
+    {
+    }
+    // `out` handed to `sink` and emptied whenever it passes about 1 KB: a large file (the scripts'
+    // sources) is never in RAM at once
+    Writer(memory::String &out, Sink sink, void *context) : _out(out), _sink(sink), _context(context)
     {
     }
 
@@ -75,8 +83,12 @@ public:
 
 private:
     void key(std::string_view key, int level, bool item);
+    void spill();
 
     memory::String &_out;
+    Sink _sink = nullptr;
+    void *_context = nullptr;
+    bool _spilled = false;
 };
 
 // Reads the named fields of one map (a section, a list item). A field that is not there keeps the
@@ -153,6 +165,9 @@ struct Device {
 
 // The backup file with the sections of the settings part, the presets part or both.
 memory::String write(const Device &device, std::span<const Section> sections, bool settings, bool presets);
+// The same, handed to `sink` a piece at a time (about 1 KB each): the file is never in RAM at once
+void write(const Device &device, std::span<const Section> sections, bool settings, bool presets, Sink sink,
+           void *context);
 
 // Checks `text`, and with `apply` imports it when the check found no problem. `report.problems`
 // empty: it was (or would be) imported.

@@ -1,0 +1,29 @@
+// DNA spiral as a script, like the built-in "DNA spiral": two strands winding around each other down
+// the canvas, a rung between them every few rows; the helix turns, so it seems to scroll up. The
+// strand in front is lighter than the one behind. Drawn on the trail in the frame block, a row at a
+// time. With sound as wide as it is loud.
+anim "DNA spiral (Glow)"
+param turns = 1.5 [0.5 .. 4] "Turns"
+param rungs = 3 [1 .. 6 step 1] "Rung every"
+
+frame {
+  fade(min(1, dt * 40))
+  cx = (W - 1) / 2
+  swing = cx * (level > 0 ? 0.25 + level * 0.75 : 1)
+  spin = t / 1.5
+  for r in 0 .. H {
+    a = spin + r * turns / H
+    side = sin(a) * swing
+    // > 0: the first strand is in front
+    depth = cos(a)
+    c = r / H / 2 + t / 16
+    if r % rungs == 0 {
+      pal(c, 0.3)
+      line(cx + side, r, cx - side, r)
+    }
+    pal(c, 0.63 + depth * 0.37)
+    dot(cx + side, r)
+    pal(c + 0.33, 0.63 - depth * 0.37)
+    dot(cx - side, r)
+  }
+}

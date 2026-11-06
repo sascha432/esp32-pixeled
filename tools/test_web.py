@@ -324,11 +324,16 @@ def long_response_test(c: Client, device: str) -> None:
     def download(path: str) -> tuple[int, bytes, float]:
         started = time.time()
         conn = http.client.HTTPConnection(device, timeout=120)
-        conn.request("GET", path, headers={"Cookie": c.cookie, "Accept-Encoding": "identity"})
-        response = conn.getresponse()
-        data = response.read()
+        try:
+            conn.request("GET", path, headers={"Cookie": c.cookie, "Accept-Encoding": "identity"})
+            response = conn.getresponse()
+            data = response.read()
+            status = response.status
+        except (http.client.HTTPException, OSError):
+            # cut off by the device (no memory for both): a check that fails, not the end of the run
+            status, data = 0, b""
         conn.close()
-        return response.status, data, time.time() - started
+        return status, data, time.time() - started
 
     def answer_time() -> float:
         started = time.time()
@@ -433,6 +438,21 @@ def main() -> None:
         check(status == 400, f"POST {path} {form} is refused", str(status))
     status, answer, _ = c.request("POST", "/api/update/url", form={"target": "firmware", "url": "ftp://x"})
     check(status in (400, 409), "a URL that is not http(s) is refused", f"{status} {answer}")
+
+    # the scripts (a firmware with CONFIG_PX_SCRIPTS: 404 without them); read and refused only
+    status, sc, _ = c.request("GET", "/api/scripts")
+    if status == 404:
+        print("      (no scripts in this firmware)")
+    else:
+        check(status == 200 and {"slots", "scripts", "run"} <= set(sc), "GET /api/scripts",
+              f"{len(sc.get('scripts', []))} of {sc.get('slots')}")
+        status, _, _ = c.request("GET", "/api/scripts/source?slug=Bad%20Name")
+        check(status == 400, "a script's bad file name is refused", str(status))
+        status, _, _ = c.request("POST", "/api/scripts/save?slug=solid", body=b'anim "x"',
+                                 headers={"Content-Type": "text/plain"})
+        check(status == 400, "a script cannot take a built-in animation's name", str(status))
+        status, _, _ = c.request("POST", "/api/scripts/delete?slug=no-such-script")
+        check(status == 404, "deleting a script that is not there is 404", str(status))
 
     # a new password over 64 characters is named as too long (the current one is wrong: nothing changes)
     status, answer, _ = c.request("POST", "/api/password", form={"current": "wrong-password", "password": "x" * 65})

@@ -7,10 +7,91 @@ and what is gone under Removed. Updated in the same commit as the change ([CLAUD
 
 ## Unreleased (0.1.0)
 
+### 2026-11-06
+
+Added
+
+* The Glow example "Fire 2012 (Glow)" (`web/glow/fire-2012-glow.glow`, under "Start from" on the
+  Scripts page): the built-in Fire 2012 as a script, a fire in every column on its own, with
+  sliders for the cooling and the sparking; with sound each column sparks with its band. It burns
+  like the built-in one; 2.2 ms a frame at 768 LEDs on the ESP32 (the built-in 0.5 ms).
+* The Glow example "Octopus (Glow)" (`web/glow/octopus-glow.glow`): the built-in Octopus as a
+  script, with WLED's sliders the built-in one fixes (legs, offset x and y); each pixel's angle and
+  distance are worked out once and kept in two grids. It looks like the built-in one; 2.1 to 2.7 ms
+  a frame (the built-in 1.3 ms).
+* Five more Glow examples from built-in animations, with the sliders WLED has: Julia (Glow) (a loop
+  per pixel, 9.6 ms a frame at 768 LEDs), Fireworks 1D (Glow) (the sparks in arrays, 1.1 ms), DNA
+  spiral (Glow) (1.1 ms), Sun radiation (Glow) (the relief from a grid, 3.3 ms) and Drift rose
+  (Glow) (1.4 ms).
+* Animations left out of the lists: the LED settings page has a box per animation (the scripts
+  too); one not ticked is not in Control's list, Home Assistant's effects or the buttons' and the
+  encoder's steps, and can still be shown (by its slug, a preset). `POST /api/leds` takes
+  `hide=<slug>` and `show=<slug>`, `/api/leds` says `hidden` in the list; NVS key `leds/hidden`,
+  in the backup (`hidden` per animation and per script).
+* Console: `leds effect next` and `leds effect prev` step like the buttons.
+
+Changed
+
+* Scripts take RAM only while they run: the one shown (and the one fading out) has its program and
+  the machine's 6.5 KB loaded by the render task from the file system when it comes on, given back
+  when it goes and while the LEDs are dark; the others are files only (`/fs/scripts/index.bin`
+  with a record per slot instead of `slots.txt`, the program `<slug>.bin`, compiled again at the
+  start when it is from another firmware or another source). Their style and sliders have a key
+  each (`leds/script0` to `script16`; the blob `leds/scripts` is moved at the first start). On the
+  test board with twelve scripts: 96 KB free with a built-in animation shown, 88 KB with a script
+  (76 KB with seven scripts before, whatever was shown). Up to 16 scripts by default (was 8): a
+  slot costs no RAM now. For developers: a build directory keeps its `sdkconfig`, so it gets the
+  16 after the sdkconfig is made again.
+* `/api/leds`: the list of the animations (`effects`) only with GET; the answers to a change and
+  the live socket's pushes have the rest and `shown` (the animation shown: slug, name, a script's
+  sliders), so no file is read while the LEDs render (a file read stops the code in flash on both
+  cores). The web UI's pages keep the list they loaded.
+* Glow: a block of a per-pixel `if` is skipped where no pixel of the 32 is in it (Julia: 27 ms a
+  frame before, 9.6 ms now).
+* Home Assistant gets the effect list again once its changes stopped for 2 s (scripts saved or
+  deleted, animations left out), not for each one: every announce queues some 30 retained
+  messages, a backup's scripts took tens of KB at once.
+* The backup's file is sent in pieces as it is written (it was made in RAM at once).
+* For developers: `tools/test_web.py` counts a download the device cuts off (two `files.zip` at
+  once without the memory for both) as a failed check instead of stopping.
+
+Fixed
+
+* A backup export with many scripts stopped the device (the file in RAM at once: no memory).
+* A backup import that the free memory cannot read (its tree of strings, about 3 times the file,
+  and a compile) is refused with 503 "not enough memory ..." instead of stopping the device; on
+  the test board a file of 19 KB with twelve scripts (the settings part alone imports).
+* A script found on the file system without a slot (an image, an unpacked backup) started with its
+  sliders at 0: now at their defaults.
+* Saving a script could hang the web server (the task watchdog): it waited for the compile task by
+  yielding, which gives no time to a task of lower priority.
+
 ### 2026-11-05
 
 Added
 
+* Seventeen more animations after WLED's 2D ones (its numbers 182, 164, 123, 66, 149, 42, 90, 120,
+  180, 126, 168, 176, 174, 122, 181, 125, 166): DNA spiral, Drift, Drift rose, Fire 2012,
+  Firenoise, Fireworks, Fireworks 1D, Ghost rider, Hiphotic, Octopus, Julia, Lissajous, Polar
+  lights, Scrolling text, Sindots, Soap, Sun radiation. Each has the sound switch and takes a
+  palette; WLED's extra sliders are fixed values, the speed 0 stands still on a picture. Scrolling
+  text runs the overlay's text while the overlay is set to text (the overlay then steps back for
+  it), else the time and the date, in the light's color. WLED's Matrix (153) is the Matrix rain
+  that was there. 0.4 to 1.5 ms a frame at 768 LEDs on the ESP32, 94 to 100 fps.
+* Scripts: animations in Glow, a small language of their own ([glow.md](glow.md)), written on
+  the web UI's new Scripts page (an editor with line numbers, five examples, the live preview, Run
+  without saving, Save), compiled on the device and run in the render task, 32 pixels per
+  instruction. A saved script is an animation: in the list, on the buttons, in presets and Home
+  Assistant's effects, with its rotation, palette and sound settings and its own sliders (`param`,
+  on Control too). Up to 8 (`CONFIG_PX_SCRIPT_SLOTS`), as files in `/fs/scripts`, in the backup's
+  presets part; console `script`. A compile error says its line; a script with an endless loop
+  stops (the status says where), the firmware does not. Plasma as a script takes 1.3 ms a frame at
+  768 LEDs on the ESP32 (the built-in one 0.7 ms).
+* For developers: `CONFIG_PX_SCRIPTS` (on by default) takes the scripts out whole: off, the
+  firmware has no code and no RAM of them and the web image no page (`tools/build_web.py`'s
+  `OPTION_FILES`); the code 432 bytes smaller than before them, the static RAM the same (the test
+  board). Glow is host tested (`glow_test.cpp`: the math, exact pixels, 1 against 32 pixels at
+  once, the budget, the examples).
 * Twelve animations after WLED's 2D ones, each with the sound switch, strength, attack and
   release: Colored bursts, Blobs, Distortion waves, Waverly, PS vortex, PS fuzzy noise, PS
   waterfall, PS GEQ 2D, PS GEQ nova, PS ghost rider, PS blobs, PS galaxy. The two GEQs need sound
@@ -19,6 +100,14 @@ Added
 
 Changed
 
+* The styles hold 64 animations (NVS key `styles` version 5, 514 bytes); those of version 4 are
+  taken over with the update. The test pattern Edges is number 42 now: a light or a preset stored
+  on it (number 25) shows DNA spiral.
+* For developers: the delayed settings writes (`platform::set_blob_later`) share one buffer of
+  1 KB (a value up to 640 bytes) instead of 288 bytes for each of 8 keys; the static RAM of the
+  test board is 464 bytes less, the styles' growth included. `effects::Params::text` is the text
+  of the animations that show one; `leds::style_of` is there without the scripts too (no copy of
+  all the styles on the caller's stack).
 * The animations' memory is the larger of a byte per pixel and a trail of 3 bytes per pixel plus
   up to 384 particles (6 KB): 6.5 KB for 768 LEDs, about 30 KB for 8192, twice during a
   crossfade. An ESP32 without PSRAM fits fewer LEDs than before.

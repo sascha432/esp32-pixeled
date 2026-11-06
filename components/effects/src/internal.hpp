@@ -27,7 +27,8 @@ struct Ring {
 constexpr size_t kRings = 8;
 
 // The start of Canvas::memory, the same for every animation; the cells (fire's heat, one byte per
-// pixel) or the trail of particles.cpp follow it.
+// pixel; at least three bytes per pixel, as large as the trail) or the trail of particles.cpp
+// follow it.
 struct Memory {
     bool started;
     uint32_t last_ms;
@@ -116,6 +117,11 @@ Rgb scale(Rgb c, uint32_t value);
 Rgb paint(const Params &params, uint8_t hue, uint8_t saturation, uint8_t value);
 void clear(Canvas &canvas);
 
+// Smooth value noise along a row (fields.cpp): out[i] the noise at x0 + i * dx, y, z, as noise8 but
+// interpolated across last (it may differ from it by one or two); the lattice is hashed once per
+// cell, not per pixel.
+void noise_row(uint8_t *out, size_t n, uint32_t x0, uint32_t dx, uint32_t y, uint32_t z);
+
 // sin and cos of `angle` (1/65536 of a turn) as -32767..32767
 int32_t sin16(uint32_t angle);
 int32_t cos16(uint32_t angle);
@@ -133,5 +139,26 @@ void ps_geq_nova(Canvas &canvas, const Params &params, uint32_t ms);
 void ps_ghost_rider(Canvas &canvas, const Params &params, uint32_t ms);
 void ps_blobs(Canvas &canvas, const Params &params, uint32_t ms);
 void ps_galaxy(Canvas &canvas, const Params &params, uint32_t ms);
+
+// curves.cpp: the second set after WLED's that draw on the trail
+void dna_spiral(Canvas &canvas, const Params &params, uint32_t ms);
+void drift(Canvas &canvas, const Params &params, uint32_t ms);
+void drift_rose(Canvas &canvas, const Params &params, uint32_t ms);
+void fireworks(Canvas &canvas, const Params &params, uint32_t ms);
+void fireworks_1d(Canvas &canvas, const Params &params, uint32_t ms);
+void ghost_rider(Canvas &canvas, const Params &params, uint32_t ms);
+void lissajous(Canvas &canvas, const Params &params, uint32_t ms);
+void sindots(Canvas &canvas, const Params &params, uint32_t ms);
+void scrolling_text(Canvas &canvas, const Params &params, uint32_t ms);
+
+// fields.cpp: the second set after WLED's that work out every pixel
+void fire_2012(Canvas &canvas, const Params &params, uint32_t ms);
+void firenoise(Canvas &canvas, const Params &params, uint32_t ms);
+void hiphotic(Canvas &canvas, const Params &params, uint32_t ms);
+void octopus(Canvas &canvas, const Params &params, uint32_t ms);
+void julia(Canvas &canvas, const Params &params, uint32_t ms);
+void polar_lights(Canvas &canvas, const Params &params, uint32_t ms);
+void soap(Canvas &canvas, const Params &params, uint32_t ms);
+void sun_radiation(Canvas &canvas, const Params &params, uint32_t ms);
 
 } // namespace px::effects::detail

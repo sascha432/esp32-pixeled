@@ -1,0 +1,18 @@
+// Sun radiation as a script, like the built-in "Sun radiation": the face of the sun, two layers of
+// noise boiling slowly, lit from the top left like a relief (lighter where the surface faces the
+// light, darker behind), in the colors of heat. The coarse noise is kept in a grid: the slope from
+// the pixel above (this frame's, its row is written) and the one to the left (the frame before's:
+// this row is written after it), two noise calls a pixel instead of four.
+anim "Sun radiation (Glow)"
+param relief = 1.5 [0 .. 4] "Relief"
+param boil = 0.5 [0.1 .. 2] "Boiling"
+grid coarse
+
+pixel {
+  z = t * boil
+  n = noise(x / 5.3, y / 5.3, z)
+  slope = (coarse[x - 1, y] - n) + (coarse[x, y - 1] - n)
+  coarse[x, y] = n
+  surface = n * 0.75 + noise(x / 2.7 + 64, y / 2.7, z * 2) * 0.25
+  heat(clamp(0.5 + (surface - 0.5) / 2 + slope * relief * 3, 0, 1))
+}

@@ -1,0 +1,8 @@
+// Plasma waves: three waves across the canvas, summed; the sum picks the color from the palette.
+anim "Plasma waves"
+param scale = 2 [0.5 .. 6] "Size"
+
+pixel {
+  s = wave(u * scale + t / 5) + wave(v * scale - t / 7) + wave((u + v) * scale / 2 + t / 3)
+  pal(s / 3 + t / 20)
+}

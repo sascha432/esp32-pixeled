@@ -1,0 +1,31 @@
+// Fire on a grid of heat: sparks at the bottom, the heat rises a row a step and cools on its way.
+anim "Fire grid"
+param cooling = 0.5 [0.1 .. 1] "Cooling"
+param sparks = 0.6 [0 .. 1] "Sparks"
+grid flame
+var clock, tick
+
+frame {
+  // 40 steps a second at the light's speed
+  clock += dt * 40
+  tick = clock >= 1
+  if tick {
+    clock -= 1
+    repeat W / 4 + 1 {
+      if rand() < sparks {
+        flame[rand(W), H - 1] = 0.7 + rand() * 0.3
+      }
+    }
+  }
+}
+
+pixel {
+  h = flame[x, y]
+  if tick {
+    // from the row below: the cell under it twice, its neighbors once
+    h = (flame[x - 1, y + 1] + flame[x, y + 1] * 2 + flame[x + 1, y + 1]) / 4
+    h = max(0, h - cooling * rand() * 0.12)
+    flame[x, y] = h
+  }
+  heat(h)
+}

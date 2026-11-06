@@ -70,8 +70,13 @@ bool write_file(char *error, size_t error_size)
 // a preset of the file or the backup: a name, an animation, a palette that are there
 bool valid(const Preset &p)
 {
-    return p.name[0] != 0 && std::memchr(p.name, 0, kNameSize) != nullptr && p.effect < effects::count() &&
-           p.effect < leds::kMaxEffects && p.style.palette < effects::palette_count() && p.style.rotation < 4;
+    bool animation = p.effect < effects::count() && p.effect < leds::kMaxEffects;
+#if CONFIG_PX_SCRIPTS
+    // a saved script's (it may come after the presets at start)
+    animation = animation || (leds::script_slot(p.effect) >= 0 && p.effect != leds::kRunScript);
+#endif
+    return p.name[0] != 0 && std::memchr(p.name, 0, kNameSize) != nullptr && animation &&
+           p.style.palette < effects::palette_count() && p.style.rotation < 4;
 }
 
 bool same(const Preset &p, const leds::State &state, const leds::Style &style)

@@ -19,6 +19,9 @@
 #include "px/webserver/http.hpp"
 
 #include "api_presets.hpp"
+#if CONFIG_PX_SCRIPTS
+#include "px/scripts/scripts.hpp"
+#endif
 
 namespace px::leds_api {
 
@@ -45,10 +48,18 @@ void write_presets(JsonWriter &json)
         char color[8];
         std::snprintf(color, sizeof(color), "#%02x%02x%02x", p.color.r, p.color.g, p.color.b);
         const effects::Info *effect = effects::info(p.effect);
+        const char *effect_slug = effect != nullptr ? effect->slug : "";
+#if CONFIG_PX_SCRIPTS
+        char script_slug[scripts::kSlugSize] = {};
+        char script_name[effects::glow::kNameSize] = {};
+        if (effect == nullptr && scripts::names(p.effect, script_slug, script_name)) {
+            effect_slug = script_slug;
+        }
+#endif
         const effects::PaletteInfo *palette = effects::palette_info(p.style.palette);
         json.begin_object()
             .string("name", p.name)
-            .string("effect", effect != nullptr ? effect->slug : "")
+            .string("effect", effect_slug)
             .string("color", color)
             .number("speed", p.speed)
             .number("brightness", p.brightness)

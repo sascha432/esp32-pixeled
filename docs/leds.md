@@ -20,6 +20,7 @@ The features follow the clock and LED matrix plugin of `kfc_fw`; its code is not
 | MQTT with Home Assistant discovery | Ethernet | sync between controllers |
 | web UI: control, layout, settings, live preview | | |
 | presets and playlists | | |
+| animations as scripts, compiled on the device ([glow.md](glow.md)) | | |
 | realtime input: DDP, E1.31 (sACN), Art-Net | | |
 | text and clock overlay | | |
 | audio: I2S microphone, UDP spectrum (WARLS, WLED audio sync) | | |
@@ -346,8 +347,8 @@ only on a device with an audio source. Built 2026-10-21:
   smoothed in the animation's memory. Sliders next to the strength (also for Spectrum, whose bars
   follow them), Home Assistant numbers "Sound attack" and "Sound release", console `leds attack`
   and `leds release`, backup `attack_ms` and `release_ms`. The stored styles of the versions
-  before are kept (NVS key `styles`, version 4 with the palette, 32 animations; version 3 is read
-  with the palette at none).
+  before are kept (NVS key `styles`, version 5 with 64 animations since 2026-11-05, 514 bytes;
+  version 4 had 32 and is taken over; version 3 is read with the palette at none).
 
 ### 6.3 The list (a proposal, to be decided)
 
@@ -380,6 +381,23 @@ only on a device with an audio source. Built 2026-10-21:
 | PS ghost rider | optional: a sharp turn on the beat | Built 2026-11-05 (after WLED's): a rider on a curl, bouncing off the edges, shedding particles that fade and change color as they age |
 | PS blobs | optional: a blob per band | Built 2026-11-05 (after WLED's): 3 to 12 soft blobs drifting, pulsing, pushing each other apart, living 5 to 15 s |
 | PS galaxy | optional: a burst of stars on the beat | Built 2026-11-05 (after WLED's): stars born in two arms that wind out as the galaxy turns, warm white in the middle, blue outside |
+| DNA spiral | optional: width | Built 2026-11-05 (after WLED's 182): two strands winding down the canvas (a turn and a half), a rung every third row, the one in front lighter; the helix turns, so it seems to scroll; with sound as wide as it is loud |
+| Drift | optional | Built 2026-11-05 (after WLED's 164): a turning kaleidoscope, a point on every ring around the middle, each ring at its own pace, mirrored across both axes, blurred into swirls |
+| Drift rose | optional | Built 2026-11-05 (after WLED's 123): 36 points at their angles swinging through the middle, the n-th n times as fast as the first, joined by dim lines: petals come and go |
+| Fire 2012 | optional: a band per column | Built 2026-11-05 (after WLED's 66, the classic Fire2012): a fire in every column on its own (cooling 80, sparks 120), 20 to 100 steps a second; unlike Fire, the heat does not spread sideways |
+| Firenoise | optional | Built 2026-11-05 (after WLED's 149): noise in tall cells rising up the canvas, hot at the bottom, in the colors of heat |
+| Fireworks | optional: more blobs, a burst on the beat | Built 2026-11-05 (after WLED's 42): blobs of color lighting up at random places and fading out, one per 24 pixels a second |
+| Fireworks 1D | optional: more sparks, a rocket on the beat | Built 2026-11-05 (after WLED's 90): a rocket from the bottom bursting at 55 to 90 % of the height into sparks that fly out and fall, white hot first |
+| Ghost rider | optional: a quarter turn on the beat | Built 2026-11-05 (after WLED's 120): a light on a winding way into loops, coming back in at the other edge, shedding ghosts to both sides; PS ghost rider bounces and sheds behind |
+| Hiphotic | optional | Built 2026-11-05 (after WLED's 180): a moving plasma, the sine of the mean of a sine along x and one along y |
+| Octopus | optional | Built 2026-11-05 (after WLED's 126): four arms winding out from the middle, waving and turning, the colors running in; each pixel's angle and distance kept in the memory |
+| Julia | optional | Built 2026-11-05 (after WLED's 168): the Julia set of a point going along the edge of the Mandelbrot set's heart (a minute around), up to 24 steps a pixel, dark inside |
+| Lissajous | optional | Built 2026-11-05 (after WLED's 176): a 3 : 2 Lissajous figure of 96 points joined by lines, its phase drifting so it seems to turn |
+| Polar lights | optional | Built 2026-11-05 (after WLED's 174): curtains of noise hanging from the top, their lower edge waving, green at the edge to violet above |
+| Scrolling text | optional | Built 2026-11-05 (after WLED's 122): the overlay's text while the overlay shows text (the overlay steps back, section 10), else the time and the date, in the color (the palette across with one), 24 pixels a second |
+| Sindots | optional | Built 2026-11-05 (after WLED's 181): 13 dots going round a circle while the view swings, from a circle to a line and back |
+| Soap | optional | Built 2026-11-05 (after WLED's 125): noise smeared in swirls, each row and column pushed by more noise, twice around the colors |
+| Sun radiation | optional | Built 2026-11-05 (after WLED's 166): two layers of noise boiling, lit from the top left like a relief, orange to light yellow |
 
 The animations with colors of their own take a palette instead (section 6.4). The new
 animations of 2026-10-21 are host tested (they draw, move, follow the sound) and timed on the
@@ -401,15 +419,33 @@ bass) and looked at as frames rendered on the PC. On the test board (ESP32, 24 x
 2.3 ms per frame, 95 to 100 fps, with the demo of `tools/audio_send.py` and in silence, turned by a
 quarter, with a palette and at speed 0; how they look on the matrix is open.
 
+**The second set after WLED's** (2026-11-05, the numbers of WLED's list in the table): the ones
+that draw on the trail as above in `curves.cpp` (DNA spiral, drift, drift rose, fireworks,
+fireworks 1D, ghost rider, Lissajous, sindots, scrolling text), the ones that work out every pixel
+in `fields.cpp` (Fire 2012, firenoise, hiphotic, octopus, Julia, polar lights, soap, sun
+radiation). The latter keep their time as a phase in the memory, moved on by the time since the
+last frame (faster with the sound), so a change of the speed does not jump and speed 0 stands; the
+noise of a row is worked out a lattice cell at a time (`detail::noise_row`), not per pixel. Their
+memory: Fire 2012 a byte per pixel (the heat), octopus two (each pixel's angle and distance), sun
+radiation one and a row (the relief), soap, firenoise and polar lights a row or two. WLED's
+Matrix (153) is the Matrix rain of 2026-10-21, not a second one. Host tested like the first set,
+Scrolling text through the middle rows and to the left, Fire 2012 from the bottom; looked at as
+frames rendered on the PC. On the test board (ESP32, 24 x 32) 0.4 to 1.5 ms per frame (the median),
+94 to 100 fps, at most 5.2 W at brightness 30, and with the demo of `tools/audio_send.py` over
+WARLS 0.6 to 3.3 ms, 90 to 100 fps; turned by a quarter, with a palette and at speed 0; the time
+and date and the overlay's text seen through the preview. How they look on the matrix is open.
+
 ### 6.4 Palettes
 
 Built 2026-10-21 (`px/effects/effects.hpp`, host tested). A palette is 16 colors once around a
 circle; the colors between two of them are blended, the last into the first. The animations that
 draw from the hue circle (rainbow, plasma, color fade, noise, ripple, spectrum and those after
-WLED's but distortion waves) take the palette's color at the same place instead; fire takes it for
-its heat, from dark at no heat, the galaxy from the middle out (its own colors: warm white to
-blue), the waterfall at random (its own: blues). Solid, breathe, gradient, twinkle, meteor and
-matrix rain show the color and take none; distortion waves has its red, green and blue.
+WLED's but distortion waves) take the palette's color at the same place instead; fire, Fire 2012,
+firenoise and sun radiation take it for their heat, from dark at no heat, the galaxy from the
+middle out (its own colors: warm white to blue), polar lights from the curtain's edge up (its own:
+green to violet), the waterfall at random (its own: blues), scrolling text across the canvas (its
+own: the color). Solid, breathe, gradient, twinkle, meteor and matrix rain show the color and take
+none; distortion waves has its red, green and blue.
 
 | Palette | Colors |
 | --- | --- |
@@ -424,6 +460,50 @@ The palette is part of each animation's style (`leds::Style::palette`, section 6
 animation like the rotation: Control's select (shown for an animation that takes one), Home
 Assistant select "Palette", console `leds palette <slug>`, backup `palette` in
 `leds.animations` and in the presets. The index is stored: a new palette goes at the end.
+
+### 6.5 Scripts
+
+Built 2026-11-05 with `CONFIG_PX_SCRIPTS` (on by default; [glow.md](glow.md) has the language).
+A script is an animation of its own: the render task draws it like a built-in one, turned by its
+rotation, with its palette, its sound switch and the crossfade.
+
+* **Numbers**: animation 200 + n is the script in slot n (`leds::kScriptBase`, up to
+  `CONFIG_PX_SCRIPT_SLOTS` = 16), 216 the editor's Run (`leds::kRunScript`, not kept over a
+  restart: the state falls back to the first animation). The built-in animations keep their
+  numbers below; the state, the presets and the buttons store a script's number as they store an
+  animation's. The buttons and the encoder step through the animations, then the saved scripts
+  (the slots there are: `leds::set_script_slots`, two bit masks).
+* **Programs, only while they run** (2026-11-06): the task keeps two running entries, the
+  animation shown and the one fading out. A script that comes on gets its style and sliders from
+  NVS and its program from the file system (`Start::load_script`, `px::scripts::load_program`, a
+  file read in the task: 1.7 KB of its stack left); one that goes, the one faded out and all of
+  them while the LEDs are dark give it back. The machine's registers and color tables
+  (`glow::scratch_size()`, 6.5 KB) are in internal RAM while one of them has its program. A save
+  (`leds::script_changed`) loads a running script's program again on clear memory; a deleted
+  script shown sends the light back to the first animation, without a crossfade. The task does
+  not wait for the scripts' lock (a save that compiles): it tries again a second later.
+* **Styles and sliders**: `leds::ScriptStyle`, NVS key `script<slot>` (18 bytes), written 10 s
+  after the last change like the styles; a slot set free or a script with other params starts
+  again at once (`reset_script_style`). In RAM only for the running ones: `script_style(slot)`
+  reads the one waiting to be written (`platform::pending_blob`) or NVS. `leds::style_of(effect)`
+  and `set_style` take a script's number, `set_script_slider` its params (0..255), `running_info`
+  the slug and the params of a running one (the web API's answers).
+* **Memory**: a script's state is in the animation's memory (section 3, `effects::memory_size`):
+  its variables, arrays, the trail when it draws, its grids. One that needs more draws dark.
+* **Status**: `Status::script_error`: why the script shown draws nothing (not there or does not
+  compile, needs more memory, stopped at a line: too many steps in a frame); in `/api/leds` as
+  `script_error`, on the Scripts page and in the console's `script`.
+
+### 6.6 Animations left out of the lists
+
+Built 2026-11-06. Each built-in animation and each script slot has a bit (NVS key `hidden`, 16
+bytes, written 10 s after the last change: a list of boxes is clicked through): one
+that is set is not in Control's list, Home Assistant's effects or the buttons' and the encoder's
+steps (`step_effect` skips it). It can still be shown: by its slug (the API, the console, Home
+Assistant's command), a preset, the button of a preset; Control lists the one shown. A slot set
+free shows its next script again. Set on the LED settings page (a box per animation), with
+`POST /api/leds` `hide=<slug>` and `show=<slug>`, in the backup (`hidden` in `leds.animations` and
+in each script). Home Assistant gets the effect list again 2 s after the last change.
 
 ---
 
@@ -557,7 +637,9 @@ settings (section 8.1 there).
   the 5 x 7 ones do not fit, as on the 24 wide test matrix), shown once the time is known. LEDs
   page card "Overlay", `POST /api/leds/overlay`, Home Assistant select "Overlay" and text "Overlay
   text", console `leds overlay`, backup `leds.overlay`, NVS key `overlay`. Not tried on the
-  matrix yet.
+  matrix yet. While the animation is Scrolling text (section 6.3) and the overlay shows a text,
+  the animation runs that text and the overlay steps back (2026-11-05); over the others it draws
+  as before.
 
 ---
 

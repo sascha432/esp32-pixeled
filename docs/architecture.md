@@ -65,6 +65,15 @@ schedules, Ethernet, IR remotes, the ESP32-P4, clocked LEDs (APA102), RGBW
 * Host builds (tests) are a plain CMake project in `host/` that compiles the pure components
   directly, without the ESP-IDF build system. Compiler: MSVC of Visual Studio 2022, with the cmake
   and ninja that ESP-IDF installs.
+* **Options** that take a feature out whole: `CONFIG_PX_DEV_CONSOLE` (the serial console) and
+  `CONFIG_PX_SCRIPTS` (Glow, [glow.md](glow.md); `CONFIG_PX_SCRIPT_SLOTS` how many, 16 by
+  default: a script that does not run takes no RAM). Off, the
+  CMake files leave the sources out, the shared files' `#if CONFIG_PX_SCRIPTS` blocks drop their
+  part and `tools/build_web.py` the web UI's (its `// #if` blocks and the files of
+  `OPTION_FILES`): no code, no RAM. Measured 2026-11-05 on the test board: the static RAM as
+  before, the code 432 bytes smaller than before the scripts (a few shared helpers compile
+  tighter). Pure code does not see the option; what it shares with the scripts is in headers with
+  an anonymous namespace (`effects/src/shared.hpp`, `trail.hpp`), so each user has its own copy.
 
 ---
 
@@ -109,12 +118,13 @@ Built: `leds` (the render task), `output` (RMT, the parallel outputs of the ESP3
 | `board` | `esp_driver_i2c` | no | The constants of the board (pins of a new device), the image tag, the shared I2C bus (section 8) |
 | `output` | `esp_driver_rmt`, `esp_driver_dma` | no | The LED lanes: the RMT backend, the parallel backends (ESP32 I2S, S3 LCD_CAM) ([leds.md](leds.md) section 2.2) |
 | `layout` | `memory` | yes | Canvas and panels, the table canvas -> LED ([leds.md](leds.md) section 4.1) |
-| `effects` | nothing | yes | The animations: canvas, parameters, time, the memory between frames, the rotation, the audio for the reactive ones ([leds.md](leds.md) section 6) |
+| `effects` | nothing | yes | The animations: canvas, parameters, time, the memory between frames, the rotation, the audio for the reactive ones ([leds.md](leds.md) section 6); with `CONFIG_PX_SCRIPTS` Glow, the scripts' compiler and machine (`src/glow`, [glow.md](glow.md)) |
 | `leds` | `effects`, `layout`, `output`, `platform` | `frame.cpp` | The render task: state, fade, gamma, power limit, the supply, NVS ([leds.md](leds.md) section 3) |
 | `audio` | `effects`, `platform`, `webserver` | `analysis.cpp` | The I2S microphone: its task, the FFT, bands, gain and beat, its settings (NVS) and `/api/audio`; the render task takes the result with each frame ([leds.md](leds.md) section 6.1) |
 | `presets` | `leds`, `effects`, `platform` | no | The presets: the light under a name, on LittleFS (`/fs/presets.bin`), applied through the render task's commands ([leds.md](leds.md) section 10) |
-| `leds_api` | `leds`, `presets`, `webserver` | no | `/api/leds` and `/api/presets`, registered by main through `webserver::Config::add_routes`; the live socket gets the sound through a getter from main, not from `audio` |
-| `hass` | `espressif/mqtt`, `cjson`, `leds`, `presets`, `webserver` | no | Home Assistant over MQTT: connection, discovery, commands, state; `/api/mqtt` ([leds.md](leds.md) section 8) |
+| `scripts` | `effects`, `leds`, `memory`, `platform` | no | The Glow scripts (`CONFIG_PX_SCRIPTS`, [glow.md](glow.md)): the files on LittleFS (`/fs/scripts`: sources, programs, the index of the slots), compiling them on a task of its own, the program of the one shown read for the render task; nothing of a script in RAM; without the option the component has no source, only its Kconfig |
+| `leds_api` | `leds`, `presets`, `scripts`, `webserver` | no | `/api/leds`, `/api/presets` and `/api/scripts` (with the option), registered by main through `webserver::Config::add_routes`; the live socket gets the sound through a getter from main, not from `audio` |
+| `hass` | `espressif/mqtt`, `cjson`, `leds`, `presets`, `scripts`, `webserver` | no | Home Assistant over MQTT: connection, discovery, commands, state; `/api/mqtt` ([leds.md](leds.md) section 8) |
 | `input` | GPIO, PCNT, `platform`, `webserver` | `button.cpp` | Buttons and a rotary encoder: events, their actions (settings), `/api/input`; the actions go to a handler in main (section 9.6) |
 | `relay`, `motion`, `light_sensor` | GPIO, I2C, ADC drivers | no | Optional hardware (section 9.6) |
 | `logbuf`, `devconsole` | `log`, `console` | no | The web UI's log, the serial console |
@@ -307,7 +317,9 @@ fits every wiring of a board (not built: `main` uses the board's pins as they ar
 
 ### 9.3 Storage
 
-* **LittleFS** for files (`/fs`): the web UI (`/fs/www`, gzipped) and later the presets. It is
+* **LittleFS** for files (`/fs`): the web UI (`/fs/www`, gzipped), the presets (`/fs/presets.bin`)
+  and the scripts (`/fs/scripts/<slug>.glow` and their programs `<slug>.bin`, the slots in
+  `/fs/scripts/index.bin`). It is
   power-loss safe and does its own wear leveling. A LittleFS that fails to mount is damaged and
   never formatted automatically, so its readable files can be exported first; a partition with no
   LittleFS at all (a new device) is formatted.
@@ -324,15 +336,16 @@ fits every wiring of a board (not built: `main` uses the board's pins as they ar
 
   | Kind of value | Written | Examples |
   | --- | --- | --- |
-  | changed by a live control or by using the device, in bursts | `platform::set_blob_later`: 10 s after the last change, at most 60 s after the first, and at a restart | `leds/state` (on, brightness, animation, color, speed), `leds/styles` (rotation, reactive, strength, attack, release; sliders and Home Assistant numbers) |
-  | saved by an explicit action (Save, a form), or a secret | at once, with commit; a failure is reported | Wi-Fi networks, policy and hotspot, web UI login, MQTT settings and password, time zone and SNTP servers, LED layout, config, lanes, overlay, auto off, audio settings and inputs, the buttons' actions; the presets (a file) |
+  | changed by a live control or by using the device, in bursts | `platform::set_blob_later`: 10 s after the last change, at most 60 s after the first, and at a restart | `leds/state` (on, brightness, animation, color, speed), `leds/styles` (rotation, reactive, strength, attack, release; sliders and Home Assistant numbers), `leds/script0` to `leds/script16` (a script's style and sliders), `leds/hidden` (the animations left out of the lists) |
+  | saved by an explicit action (Save, a form), or a secret | at once, with commit; a failure is reported | Wi-Fi networks, policy and hotspot, web UI login, MQTT settings and password, time zone and SNTP servers, LED layout, config, lanes, overlay, auto off, audio settings and inputs, the buttons' actions; the presets and the scripts (files) |
   | device state that changes rarely | at once, when it changed | `leds/boot` (switched off by motion), `network/last_seen` |
   | developer and calibration | at once | console log level, `logbuf/debug`, the light sensor |
 
   Nothing writes per frame: a value that can change more often than about once a minute takes
   the delayed write. Its owner reads it from its RAM copy, not back from NVS. NVS skips a value
   that did not change, so writing the same one again costs no flash. The delayed table has 8
-  keys of up to 288 bytes; a ninth key writes the waiting ones at once. A factory reset drops the
+  keys whose values share 1 KB (one up to 640 bytes; the LED styles take 514); a ninth key, or
+  a value that does not fit, writes the waiting ones at once. A factory reset drops the
   waiting values, so none of them comes back with the restart. A backup import sets the live
   values through the same calls, so they are stored within 10 s.
 * **Backup**: one YAML file with two parts, the settings and the presets
@@ -340,7 +353,8 @@ fits every wiring of a board (not built: `main` uses the board's pins as they ar
   writes its fields and reads them back. An import is checked completely first and applied only
   when no section found a problem. Never a password in an export; an import may carry them,
   added by hand. Built sections: `network`, `leds`, `audio`, `mqtt`, `time`, `input`, `webui`
-  (import only); `presets` in the presets part.
+  (import only); `scripts` (with `CONFIG_PX_SCRIPTS`, before `leds`: the light may show one) and
+  `presets` in the presets part.
 * **Logs** are viewable in the web UI (`logbuf`): errors and warnings always, info messages as
   well in the debug mode (stored).
 
@@ -352,7 +366,8 @@ fits every wiring of a board (not built: `main` uses the board's pins as they ar
 | `network` | the station and hotspot state machine of sections 9.1 and 9.2, up to 5 stored networks, the hotspot password, scan results, stored in the settings NVS. One task owns the driver and the state; commands are queued, readers get copies (`status()`). Files: `network.cpp` (the state, the task, start, modem sleep), `station.cpp` (scan, connect, retry, roam), `commands.cpp` (the saved networks), `api.cpp` (the calls of other tasks, the holds and the activity of section 9.2). mDNS: the device answers as `<device name>.local` and announces `_http._tcp`, in both apps |
 | `webserver` | captive portal DNS and redirect, the status API and the built-in page, the setup pages, login, Wi-Fi, hotspot, update, files, log and backup API, the time API (`register_time_routes`, registered by `main` only). Serves the web files from LittleFS, with a recovery page compiled in that works without the file system ([ui/web/web-recovery.md](ui/web/web-recovery.md)). `Config::add_routes` lets `main` register more routes (the LED, audio, MQTT and time API). Routes are made with `detail::route()` (the main firmware has WebSocket support, `CONFIG_HTTPD_WS_SUPPORT`, which adds fields to `httpd_uri_t`). The pages follow their state on one WebSocket per tab, `/api/live` (`live.cpp`, [ui/web/web-app.md](ui/web/web-app.md) section 4.1): a route file splits its GET into a `StateWriter` and registers it with `add_live_topic` (`px/webserver/http.hpp`, also the LED, preset, audio and MQTT APIs); the answer is pushed when it changes, up to 3 paths per tab, the login checked before the handshake and on every check, `{}` after 10 s without a frame; not in the recovery app (`"live": false` in `/api/status`). Sessions (`idle.cpp`, the server's `open_fn` and `close_fn`): every send and receive notes the time, a session silent for 30 s is closed (not a WebSocket, not a long response; TCP keep-alive finds a dead socket); every byte received is activity for modem sleep. Long responses (`files.zip`) run on a task of their own (`px/webserver/async.hpp`). 12 sessions, the oldest closed when a 13th comes (LRU); that needs a free lwIP socket, so sessions, the server's 3 sockets, the captive DNS (open only while the hotspot is on) and the device's own clients stay within `CONFIG_LWIP_MAX_SOCKETS` (24, a `static_assert` in `webserver.cpp`) |
 | `ota` | firmware and file system images from an upload, a tool or a URL download, app rollback ([ui/web/web-app.md](ui/web/web-app.md) section 5), restart into the recovery app and back, partition layout of section 9.5 |
-| `devconsole` | serial command line for development (`CONFIG_PX_DEV_CONSOLE`): Wi-Fi networks, hotspot (`hotspot open` as the button at boot), file system, memory, log level, light sensor, relay, motion sensor, audio, LEDs (palette, presets), buttons (`input`), MQTT (`mqtt`, its settings without the password), lwIP's sockets (`sockets`), the stack of every task (`mem tasks`), restart, factory reset, a crash on purpose (`crash yes`) (`help` lists them); `wifi status` shows modem sleep (`modem:`) |
+| `devconsole` | serial command line for development (`CONFIG_PX_DEV_CONSOLE`): Wi-Fi networks, hotspot (`hotspot open` as the button at boot), file system, memory, log level, light sensor, relay, motion sensor, audio, LEDs (palette, presets), the scripts (`script`, with `CONFIG_PX_SCRIPTS`), buttons (`input`), MQTT (`mqtt`, its settings without the password), lwIP's sockets (`sockets`), the stack of every task (`mem tasks`), restart, factory reset, a crash on purpose (`crash yes`) (`help` lists them); `wifi status` shows modem sleep (`modem:`) |
+| `scripts` | the Glow scripts (`CONFIG_PX_SCRIPTS`, [glow.md](glow.md)): the files and slots, compiling (on a short task with an 8 KB stack, 5.5 KB measured for the deepest scripts, so the compiler's nesting does not weigh on the caller's), the programs for the render task, the backup's `scripts` section |
 | `logbuf` | the log in a ring buffer for the web UI's log page |
 | `relay` | relays on GPIOs: the LED power supply (section 9.6) |
 | `motion` | a motion sensor on a GPIO (section 9.6) |
@@ -447,9 +462,10 @@ esp32-pixeled/
     board/       include/px/board/board.hpp  boards/<name>.cpp  src/variant/ the variant that changes nothing
   host/
     CMakeLists.txt  the host build (MSVC), python tools/host_test.py builds and runs it
-    tests/       unit tests for formats, the backup, the network choice, the time zones;
-                 stubs/ of ESP-IDF headers
-  web/                           the web UI (index.html, app.js, app.css, vendor/bootstrap.min.css)
+    tests/       unit tests for formats, the backup, the network choice, the time zones, the
+                 animations and Glow; stubs/ of ESP-IDF headers
+  web/                           the web UI (index.html, app.js, app.css, leds.js, vendor/bootstrap.min.css);
+                                 scripts.js and glow/ (the example scripts) with CONFIG_PX_SCRIPTS
   tools/
     build.py, build_fs.py, update.py   firmware, file system image, update over the network
     build_web.py                       the web files for one firmware (board-only pages left out, Bootstrap purged, minified)
@@ -459,6 +475,7 @@ esp32-pixeled/
   docs/
     architecture.md              this file
     leds.md                      the LED engine: drivers, layout, animations, MQTT, plan
+    glow.md                      Glow, the script language of the animations
     TODO.md, CHANGELOG.md
     adding-a-board.md            how to add a board or a variant
     boards.md                    every board and variant with its GPIOs

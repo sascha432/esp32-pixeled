@@ -19,6 +19,10 @@
 #include "px/network/network.hpp"
 #include "px/platform/time_sync.hpp"
 #include "px/presets/presets.hpp"
+#if CONFIG_PX_SCRIPTS
+#include "px/memory/large.hpp"
+#include "px/scripts/scripts.hpp"
+#endif
 #include "px/webserver/webserver.hpp"
 
 namespace {
@@ -198,6 +202,202 @@ void read_webui(const Node &value, bool apply, backup::Report &report)
     report.note("webui", apply ? "new login, sign in again" : "the login will be replaced, sign in again afterwards");
 }
 
+#if CONFIG_PX_SCRIPTS
+// ---------------------------------------------------------------------------------- scripts
+
+// The scripts (docs/glow.md), in the backup's presets part: each one's source, style and sliders.
+// An import replaces them all, every one compiled before anything is applied. It comes before the
+// LEDs and the presets, whose animation may be one of them.
+
+bool read_palette(backup::Fields &fields, uint8_t &palette);
+
+// the slugs of the file being imported: the sections after it may name them before they are saved;
+// on the heap while an import runs (forget_imported after it)
+char (*g_imported)[px::scripts::kSlugSize] = nullptr;
+size_t g_imported_count = 0;
+// a script's sliders (its params): keys that outlive the reading (backup::Fields keeps them)
+constexpr std::string_view kSliderKeys[] = {"p0", "p1", "p2", "p3", "p4", "p5", "p6", "p7"};
+static_assert(std::size(kSliderKeys) == px::effects::glow::kMaxParams);
+
+void forget_imported()
+{
+    px::memory::release_large(g_imported);
+    g_imported = nullptr;
+    g_imported_count = 0;
+}
+
+bool imported(const char *slug)
+{
+    for (size_t i = 0; g_imported != nullptr && i < g_imported_count; i++) {
+        if (std::strcmp(g_imported[i], slug) == 0) {
+            return true;
+        }
+    }
+    return false;
+}
+
+void write_scripts(backup::Writer &out)
+{
+    namespace scripts = px::scripts;
+    out.section("scripts");
+    out.open("list");
+    auto *s = static_cast<scripts::Script *>(px::memory::allocate_large(sizeof(scripts::Script)));
+    auto *text = static_cast<char *>(px::memory::allocate_large(px::effects::glow::kMaxSource + 1));
+    for (size_t slot = 0; s != nullptr && text != nullptr && slot < px::leds::kScriptSlots; slot++) {
+        size_t length = 0;
+        if (!scripts::get(slot, *s) ||
+            scripts::source(s->slug, text, px::effects::glow::kMaxSource + 1, length) != ESP_OK) {
+            continue;
+        }
+        out.item("slug", s->slug);
+        out.text("source", {text, length}, 3);
+        const px::leds::ScriptStyle style = px::leds::script_style(slot);
+        const px::leds::Style &st = style.style;
+        out.number("rotation", st.rotation * 90, 3);
+        out.boolean("reactive", st.reactive, 3);
+        out.number("strength", st.strength, 3);
+        out.number("attack_ms", st.attack_ms, 3);
+        out.number("release_ms", st.release_ms, 3);
+        out.text("palette", px::effects::palette_info(st.palette)->slug, 3);
+        out.boolean("hidden", px::leds::hidden(px::leds::script_effect(slot)), 3);
+        for (size_t k = 0; k < s->param_count; k++) {
+            out.number(kSliderKeys[k], style.sliders[k], 3);
+        }
+    }
+    px::memory::release_large(text);
+    px::memory::release_large(s);
+}
+
+void read_scripts(const Node &value, bool apply, backup::Report &report)
+{
+    namespace scripts = px::scripts;
+    namespace leds = px::leds;
+    struct Entry {
+        char slug[scripts::kSlugSize];
+        leds::Style style;
+        uint8_t sliders[px::effects::glow::kMaxParams];
+        bool has_slider[px::effects::glow::kMaxParams];
+        bool hidden;
+        const Node *item;
+    };
+    const size_t problems = report.problems.size();
+    backup::Fields fields(value, "scripts", report);
+    const Node *items = fields.node("list");
+    fields.finish();
+    size_t count = 0;
+    forget_imported();
+    // only while an import runs: not static
+    auto *list = static_cast<Entry *>(px::memory::allocate_large(sizeof(Entry) * leds::kScriptSlots));
+    g_imported = static_cast<char (*)[scripts::kSlugSize]>(
+        px::memory::allocate_large(static_cast<size_t>(scripts::kSlugSize) * leds::kScriptSlots));
+    if (list == nullptr || g_imported == nullptr) {
+        px::memory::release_large(list);
+        forget_imported();
+        report.problem("scripts", "no memory");
+        return;
+    }
+    if (items != nullptr && items->kind != Kind::List) {
+        fields.problem("list", "a list of scripts expected (- slug: ...)");
+    } else if (items != nullptr && items->list.size() > leds::kScriptSlots) {
+        char message[32];
+        std::snprintf(message, sizeof(message), "at most %u scripts", static_cast<unsigned>(leds::kScriptSlots));
+        fields.problem("list", message);
+    } else if (items != nullptr) {
+        for (const Node &item : items->list) {
+            backup::Fields sf(item, fields.path("list"), report);
+            Entry &e = list[count];
+            e = {};
+            e.item = &item;
+            String slug;
+            if (!sf.text("slug", scripts::kSlugSize - 1, slug) || !scripts::valid_slug(slug.c_str()) ||
+                px::effects::find(slug.c_str()) < px::effects::count()) {
+                sf.problem("slug", "1 to 23 of a-z, 0-9 and -, not a built-in animation's");
+            }
+            std::snprintf(e.slug, sizeof(e.slug), "%s", slug.c_str());
+            String source;
+            px::effects::glow::Error error;
+            if (!sf.text("source", px::effects::glow::kMaxSource, source)) {
+                sf.problem("source", "the script is missing");
+            } else if (scripts::check({source.data(), source.size()}, error) != ESP_OK || error.text[0] != '\0') {
+                char message[sizeof(error.text) + 16];
+                std::snprintf(message, sizeof(message), "line %u: %s", error.line, error.text);
+                sf.problem("source", message);
+            }
+            long degrees = 0;
+            sf.number("rotation", 0, 270, degrees);
+            if (degrees % 90 != 0) {
+                sf.problem("rotation", "0, 90, 180 or 270");
+            }
+            e.style.rotation = static_cast<uint8_t>(degrees / 90);
+            sf.boolean("reactive", e.style.reactive);
+            sf.number("strength", 0, 255, e.style.strength);
+            sf.number("attack_ms", 0, px::effects::kMaxAttackMs, e.style.attack_ms);
+            sf.number("release_ms", 0, px::effects::kMaxReleaseMs, e.style.release_ms);
+            read_palette(sf, e.style.palette);
+            sf.boolean("hidden", e.hidden);
+            for (size_t k = 0; k < px::effects::glow::kMaxParams; k++) {
+                e.has_slider[k] = sf.number(kSliderKeys[k], 0, 255, e.sliders[k]);
+            }
+            sf.finish();
+            if (imported(e.slug)) {
+                char message[48];
+                std::snprintf(message, sizeof(message), "'%.23s' is in the list twice", e.slug);
+                fields.problem("list", message);
+            }
+            std::memcpy(g_imported[g_imported_count++], e.slug, sizeof(e.slug));
+            count++;
+        }
+    }
+    if (report.problems.size() != problems || items == nullptr || !apply) {
+        px::memory::release_large(list);
+        return;
+    }
+    // the ones not in the file go, then each one of the file is saved with its style and sliders
+    auto *s = static_cast<scripts::Script *>(px::memory::allocate_large(sizeof(scripts::Script)));
+    for (size_t slot = 0; s != nullptr && slot < leds::kScriptSlots; slot++) {
+        if (scripts::get(slot, *s) && !imported(s->slug)) {
+            scripts::remove(s->slug);
+        }
+    }
+    px::memory::release_large(s);
+    for (size_t i = 0; i < count; i++) {
+        const Entry &e = list[i];
+        String source;
+        backup::Fields sf(*e.item, fields.path("list"), report);
+        sf.text("source", px::effects::glow::kMaxSource, source);
+        px::effects::glow::Error error;
+        if (scripts::save(e.slug, {source.data(), source.size()}, error) != ESP_OK || error.text[0] != '\0') {
+            char message[112];
+            std::snprintf(message, sizeof(message), "%.23s: %.79s", e.slug, error.text);
+            report.problem("scripts", message);
+            continue;
+        }
+        const int effect = scripts::find(e.slug);
+        if (effect < 0) {
+            continue;
+        }
+        leds::set_style(static_cast<size_t>(effect), e.style);
+        leds::set_hidden(static_cast<size_t>(effect), e.hidden);
+        for (size_t k = 0; k < px::effects::glow::kMaxParams; k++) {
+            if (e.has_slider[k]) {
+                leds::set_script_slider(static_cast<size_t>(leds::script_slot(static_cast<size_t>(effect))), k,
+                                        e.sliders[k]);
+            }
+        }
+    }
+    px::memory::release_large(list);
+}
+
+// the animation number of a script's slug, -1 when there is none; `known` also for one the import
+// brings
+int script_effect(const char *slug, bool &known)
+{
+    const int effect = px::scripts::find(slug);
+    known = effect >= 0 || imported(slug);
+    return effect;
+}
+#endif
+
 // ------------------------------------------------------------------------------------- leds
 
 // The LEDs (docs/leds.md): the state, the power and timing config and the layout with its panels.
@@ -217,7 +417,19 @@ void write_leds(backup::Writer &out)
     out.boolean("on", s.state.on);
     out.number("brightness", s.state.brightness);
     const px::effects::Info *effect = px::effects::info(s.state.effect);
+#if CONFIG_PX_SCRIPTS
+    char script_slug[px::scripts::kSlugSize] = {};
+    char script_name[px::effects::glow::kNameSize] = {};
+    // the editor's run is not kept: "solid"
+    if (effect == nullptr && s.state.effect != px::leds::kRunScript &&
+        px::scripts::names(s.state.effect, script_slug, script_name)) {
+        out.text("effect", script_slug);
+    } else {
+        out.text("effect", effect != nullptr ? effect->slug : "solid");
+    }
+#else
     out.text("effect", effect != nullptr ? effect->slug : "solid");
+#endif
     char color[8];
     std::snprintf(color, sizeof(color), "#%02x%02x%02x", s.state.color.r, s.state.color.g, s.state.color.b);
     out.text("color", color);
@@ -266,8 +478,9 @@ void write_leds(backup::Writer &out)
     for (size_t i = 0; i < px::effects::count() && i < px::leds::kMaxEffects; i++) {
         const px::leds::Style &st = styles.style[i];
         const px::leds::Style standard{};
+        const bool hidden = px::leds::hidden(i);
         if (st.rotation == 0 && !st.reactive && st.strength == standard.strength && st.attack_ms == standard.attack_ms &&
-            st.release_ms == standard.release_ms && st.palette == standard.palette) {
+            st.release_ms == standard.release_ms && st.palette == standard.palette && !hidden) {
             continue;
         }
         if (!opened) {
@@ -281,6 +494,7 @@ void write_leds(backup::Writer &out)
         out.number("attack_ms", st.attack_ms, 3);
         out.number("release_ms", st.release_ms, 3);
         out.text("palette", px::effects::palette_info(st.palette)->slug, 3);
+        out.boolean("hidden", hidden, 3);
     }
     out.open("panels");
     for (size_t i = 0; i < l.panel_count; i++) {
@@ -342,11 +556,23 @@ void read_leds(const Node &value, bool apply, backup::Report &report)
     String effect;
     if (fields.text("effect", 32, effect)) {
         const size_t index = px::effects::find(effect.c_str());
+#if CONFIG_PX_SCRIPTS
+        bool known = false;
+        const int script = index >= px::effects::count() ? script_effect(effect.c_str(), known) : -1;
+        if (script >= 0) {
+            state.effect = static_cast<uint8_t>(script);
+        } else if (index >= px::effects::count() && !known) {
+            fields.problem("effect", "not an animation of this firmware");
+        } else if (index < px::effects::count()) {
+            state.effect = static_cast<uint8_t>(index);
+        }
+#else
         if (index >= px::effects::count()) {
             fields.problem("effect", "not an animation of this firmware");
         } else {
             state.effect = static_cast<uint8_t>(index);
         }
+#endif
     }
     String color;
     if (fields.text("color", 7, color) && !parse_color(color, state.color)) {
@@ -421,6 +647,9 @@ void read_leds(const Node &value, bool apply, backup::Report &report)
     }
     leds::Styles styles = leds::styles();
     const Node *style_list = fields.node("animations");
+    // the animations left out of the lists, by index
+    uint64_t hidden = 0;
+    static_assert(leds::kMaxEffects <= 64);
     if (style_list != nullptr && style_list->kind != Kind::List) {
         fields.problem("animations", "a list of animations expected (- animation: fire ...)");
     } else if (style_list != nullptr) {
@@ -446,6 +675,9 @@ void read_leds(const Node &value, bool apply, backup::Report &report)
             af.number("attack_ms", 0, px::effects::kMaxAttackMs, styles.style[index].attack_ms);
             af.number("release_ms", 0, px::effects::kMaxReleaseMs, styles.style[index].release_ms);
             read_palette(af, styles.style[index].palette);
+            bool hide = false;
+            af.boolean("hidden", hide);
+            hidden |= hide ? uint64_t{1} << index : 0;
             af.finish();
         }
     }
@@ -513,6 +745,7 @@ void read_leds(const Node &value, bool apply, backup::Report &report)
         if (style_list != nullptr) {
             for (size_t i = 0; i < px::effects::count() && i < leds::kMaxEffects; i++) {
                 leds::set_style(i, styles.style[i]);
+                leds::set_hidden(i, ((hidden >> i) & 1u) != 0);
             }
         }
         if (has_auto_off || has_minutes) {
@@ -540,7 +773,17 @@ void write_presets(backup::Writer &out)
         }
         out.item("name", p.name);
         const px::effects::Info *effect = px::effects::info(p.effect);
+#if CONFIG_PX_SCRIPTS
+        char script_slug[px::scripts::kSlugSize] = {};
+        char script_name[px::effects::glow::kNameSize] = {};
+        if (effect == nullptr && px::scripts::names(p.effect, script_slug, script_name)) {
+            out.text("effect", script_slug, 3);
+        } else {
+            out.text("effect", effect != nullptr ? effect->slug : "solid", 3);
+        }
+#else
         out.text("effect", effect != nullptr ? effect->slug : "solid", 3);
+#endif
         char color[8];
         std::snprintf(color, sizeof(color), "#%02x%02x%02x", p.color.r, p.color.g, p.color.b);
         out.text("color", color, 3);
@@ -583,10 +826,22 @@ void read_presets(const Node &value, bool apply, backup::Report &report)
             }
             std::snprintf(p.name, sizeof(p.name), "%s", name.c_str());
             String effect;
-            const size_t index = pf.text("effect", 32, effect) ? px::effects::find(effect.c_str()) : 0;
+            size_t index = pf.text("effect", 32, effect) ? px::effects::find(effect.c_str()) : 0;
+#if CONFIG_PX_SCRIPTS
+            // a script: its number once saved (the scripts are applied first)
+            bool known = false;
+            if (index >= px::effects::count()) {
+                const int script = script_effect(effect.c_str(), known);
+                index = script >= 0 ? static_cast<size_t>(script) : (known ? px::leds::kScriptBase : index);
+            }
+            if (!known && (index >= px::effects::count() || index >= px::leds::kMaxEffects)) {
+                pf.problem("effect", "not an animation of this firmware");
+            }
+#else
             if (index >= px::effects::count() || index >= px::leds::kMaxEffects) {
                 pf.problem("effect", "not an animation of this firmware");
             }
+#endif
             p.effect = static_cast<uint8_t>(index);
             String color;
             if (pf.text("color", 7, color) && !parse_color(color, p.color)) {
@@ -858,6 +1113,10 @@ void read_time(const Node &value, bool apply, backup::Report &report)
 // in this order: a section may depend on one before it
 const backup::Section kSections[] = {
     {"network", write_network, read_network},
+#if CONFIG_PX_SCRIPTS
+    // the presets part; before the LEDs and the presets, which may show a script
+    {"scripts", write_scripts, read_scripts, nullptr, backup::Part::Presets},
+#endif
     {"leds", write_leds, read_leds},
     {"audio", write_audio, read_audio},
     {"mqtt", write_mqtt, read_mqtt},
@@ -869,13 +1128,16 @@ const backup::Section kSections[] = {
 
 const px::webserver::BackupAccess kBackupAccess{
     .export_file =
-        [](bool settings, bool presets) {
+        [](bool settings, bool presets, void (*chunk)(std::string_view piece, void *context), void *context) {
             const backup::Device device{px::board::info().name, esp_app_get_description()->version};
-            return backup::write(device, kSections, settings, presets);
+            backup::write(device, kSections, settings, presets, chunk, context);
         },
     .import_file =
         [](std::string_view text, bool check_only) {
             backup::Report report = backup::read(text, kSections, !check_only);
+#if CONFIG_PX_SCRIPTS
+            forget_imported();
+#endif
             px::webserver::BackupReport out;
             out.problems = std::move(report.problems);
             out.ignored = std::move(report.ignored);

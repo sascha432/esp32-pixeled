@@ -1,6 +1,6 @@
 // The web UI of pixeled (docs/ui/web/web-app.md): one page, the views follow the hash (#/wifi). Plain
 // JavaScript, no framework; Bootstrap 5.3 only as CSS. tools/build_web.py drops the `// #if CONFIG_*`
-// blocks of options the firmware lacks (none yet) and minifies the file. Everything comes from the
+// blocks of options the firmware lacks (the scripts) and minifies the file. Everything comes from the
 // device API (components/webserver). Texts from outside (network names) are escaped.
 "use strict";
 
@@ -206,6 +206,9 @@ const navIcons = {
   light: '<circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M2 12h2M20 12h2M5 5l1.5 1.5M17.5 17.5L19 19M5 19l1.5-1.5M17.5 6.5L19 5"/>',
   dark: '<path d="M20 14.5A8 8 0 0 1 9.5 4a8 8 0 1 0 10.5 10.5z"/>',
   logout: '<path d="M15 4h4v16h-4M10 8l-4 4 4 4M6 12h10"/>',
+// #if CONFIG_PX_SCRIPTS
+  scripts: '<path d="M8 7l-5 5 5 5M16 7l5 5-5 5M14 4l-4 16"/>',
+// #endif
 };
 const navIcon = (name) => `<svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
   stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${navIcons[name]}</svg>`;
@@ -216,7 +219,11 @@ const navIcon = (name) => `<svg width="22" height="22" viewBox="0 0 24 24" fill=
 // entry whose feature the device lacks is hidden, a group without a shown entry too (the recovery
 // app has none of the LED pages).
 const menuGroups = [
-  ["Light", [["leds", "Control", "Control", "leds"], ["sound", "Sound", "Sound", "audio"]]],
+  ["Light", [["leds", "Control", "Control", "leds"], ["sound", "Sound", "Sound", "audio"],
+// #if CONFIG_PX_SCRIPTS
+    ["scripts", "Scripts", "Scripts", "leds"],
+// #endif
+  ]],
   ["Hardware", [["led-settings", "LED settings", "Settings", "leds"], ["layout", "Layout", "Layout", "leds"],
     ["buttons", "Buttons", "Buttons", "buttons"]]],
   ["Network", [["wifi", "Wi-Fi", "Wi-Fi"], ["hotspot", "Hotspot", "Hotspot"], ["mqtt", "MQTT", "MQTT", "mqtt"]]],
@@ -507,6 +514,15 @@ const views = {
   "led-settings": () => ledPage("ledSettings", "LED settings"),
   layout: () => ledPage("layout", "Layout"),
   buttons: () => ledPage("buttons", "Buttons"),
+// #if CONFIG_PX_SCRIPTS
+  // the editor of the scripts (scripts.js, with leds.js' preview)
+  async scripts() {
+    await loadScript("leds.js");
+    if ((await api("/api/update")).app === "recovery") return notInRecovery("Scripts");
+    await loadScript("scripts.js");
+    await window.pxScripts.page();
+  },
+// #endif
   async status() {
     const page = render(`<h1>Status</h1><div id="status-cards">Loading ...</div>`);
     const draw = (s) => {
@@ -933,6 +949,11 @@ const views = {
     const [s, u] = await Promise.all([api("/api/status"), api("/api/update")]);
     // the recovery app has no backup (its /api/backup answers 404)
     const recovery = u.app === "recovery";
+    // the presets part holds the scripts too
+    let presetsPart = "Presets only";
+// #if CONFIG_PX_SCRIPTS
+    presetsPart = "Presets and scripts";
+// #endif
     render(`<h1>System</h1>` +
       card("Device", facts([
         ["Firmware", esc(s.device.firmware)], ["Built", esc(s.device.built)], ["Uptime", duration(s.device.uptime_s)],
@@ -945,7 +966,7 @@ const views = {
         <div class="d-flex gap-2 flex-wrap mb-3">
           <a class="btn btn-outline-secondary" href="/api/backup.yaml">Export all</a>
           <a class="btn btn-outline-secondary" href="/api/backup.yaml?parts=settings">Settings only</a>
-          <a class="btn btn-outline-secondary" href="/api/backup.yaml?parts=presets">Presets only</a>
+          <a class="btn btn-outline-secondary" href="/api/backup.yaml?parts=presets">${presetsPart}</a>
         </div>
         <label class="form-label" for="backup-file">Import a backup</label>
         <input id="backup-file" type="file" class="form-control mb-2" accept=".yaml,.yml">

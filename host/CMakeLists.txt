@@ -25,6 +25,7 @@ add_executable(px_tests
     tests/check.cpp
     tests/effects_test.cpp
     tests/frame_test.cpp
+    tests/glow_test.cpp
     tests/input_test.cpp
     tests/layout_test.cpp
     tests/memory_test.cpp
@@ -38,7 +39,20 @@ add_executable(px_tests
     ${PX_ROOT}/components/config/src/backup.cpp
     ${PX_ROOT}/components/effects/src/effects.cpp
     ${PX_ROOT}/components/effects/src/particles.cpp
+    ${PX_ROOT}/components/effects/src/curves.cpp
+    ${PX_ROOT}/components/effects/src/fields.cpp
     ${PX_ROOT}/components/effects/src/overlay.cpp
+    # glow (the scripts): always here, in the firmware only with CONFIG_PX_SCRIPTS
+    ${PX_ROOT}/components/effects/src/glow/assignments.cpp
+    ${PX_ROOT}/components/effects/src/glow/calls.cpp
+    ${PX_ROOT}/components/effects/src/glow/compiler.cpp
+    ${PX_ROOT}/components/effects/src/glow/declarations.cpp
+    ${PX_ROOT}/components/effects/src/glow/expressions.cpp
+    ${PX_ROOT}/components/effects/src/glow/lexer.cpp
+    ${PX_ROOT}/components/effects/src/glow/registers.cpp
+    ${PX_ROOT}/components/effects/src/glow/runtime.cpp
+    ${PX_ROOT}/components/effects/src/glow/statements.cpp
+    ${PX_ROOT}/components/effects/src/glow/vm.cpp
     ${PX_ROOT}/components/formats/src/json_writer.cpp
     ${PX_ROOT}/components/input/src/button.cpp
     ${PX_ROOT}/components/layout/src/layout.cpp

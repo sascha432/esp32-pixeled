@@ -1,0 +1,21 @@
+menu "PixeLED scripts"
+
+    config PX_SCRIPTS
+        bool "Glow scripts: animations written and run on the device"
+        default y
+        help
+            Animations in the Glow language (docs/glow.md): written in the web UI, kept on
+            LittleFS, compiled on the device and run by a small machine in the render task.
+            Without it the firmware has none of it: no code, no RAM, no web page.
+
+    config PX_SCRIPT_SLOTS
+        int "Scripts at most"
+        depends on PX_SCRIPTS
+        range 1 16
+        default 16
+        help
+            How many scripts the device keeps (their animation numbers 200 to 215). A script
+            takes no RAM until it is shown: its record (152 bytes of /fs/scripts/index.bin), its
+            source and its program are files, its style and sliders an NVS key of 18 bytes.
+
+endmenu

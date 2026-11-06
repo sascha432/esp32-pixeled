@@ -1,6 +1,7 @@
-// Delayed settings writes (px/platform/settings.hpp). The values wait in a small table; an
-// esp_timer, restarted by every call but not past kWriteLaterMaxMs after the first pending value,
-// writes them from the esp_timer task.
+// Delayed settings writes (px/platform/settings.hpp). The values wait in a small table, their
+// bytes one after the other in a buffer they share (the LED styles take half of it, the state a
+// few bytes); an esp_timer, restarted by every call but not past kWriteLaterMaxMs after the first
+// pending value, writes them from the esp_timer task.
 
 #include <algorithm>
 #include <cstring>
@@ -20,18 +21,23 @@ namespace {
 constexpr const char *kTag = "settings";
 constexpr size_t kNameSize = 16; // NVS namespace and key names have up to 15 characters
 
+static_assert(kMaxPendingSize <= kPendingBytes);
+
 struct Pending {
     char name_space[kNameSize];
     char key[kNameSize];
-    uint8_t data[kMaxPendingSize];
-    size_t size;
+    // where its value is in g_data
+    uint16_t offset;
+    uint16_t size;
 };
 
 // g_lock is held while the values are written, so a discard waits for a write in progress. In
 // PSRAM on the S3 (docs/architecture.md section 11): the tasks that set values and the timer
 // task; NVS copies a value from PSRAM through a buffer of its own.
 EXT_RAM_BSS_ATTR Pending g_pending[kMaxPendingWrites];
+EXT_RAM_BSS_ATTR uint8_t g_data[kPendingBytes];
 size_t g_count = 0;
+size_t g_used = 0; // bytes of g_data
 int64_t g_first_us = 0; // when the oldest pending value came
 SemaphoreHandle_t g_lock = nullptr;
 esp_timer_handle_t g_timer = nullptr;
@@ -41,7 +47,7 @@ void write_locked()
 {
     for (size_t i = 0; i < g_count; i++) {
         Settings settings(g_pending[i].name_space, Settings::Mode::ReadWrite);
-        esp_err_t err = settings.set_blob(g_pending[i].key, g_pending[i].data, g_pending[i].size);
+        esp_err_t err = settings.set_blob(g_pending[i].key, g_data + g_pending[i].offset, g_pending[i].size);
         if (err == ESP_OK) {
             err = settings.commit();
         }
@@ -50,6 +56,7 @@ void write_locked()
         }
     }
     g_count = 0;
+    g_used = 0;
 }
 
 void write_all()
@@ -95,8 +102,13 @@ esp_err_t set_blob_later(const char *name_space, const char *key, const void *da
             slot = &g_pending[i];
         }
     }
+    if (slot != nullptr && slot->size != size) {
+        // a key's value has one size; one that changed is written with the others first
+        write_locked();
+        slot = nullptr;
+    }
     if (slot == nullptr) {
-        if (g_count == kMaxPendingWrites) {
+        if (g_count == kMaxPendingWrites || g_used + size > kPendingBytes) {
             // a full table is written now rather than a value lost
             write_locked();
         }
@@ -106,9 +118,11 @@ esp_err_t set_blob_later(const char *name_space, const char *key, const void *da
         slot = &g_pending[g_count++];
         std::strcpy(slot->name_space, name_space);
         std::strcpy(slot->key, key);
+        slot->offset = static_cast<uint16_t>(g_used);
+        slot->size = static_cast<uint16_t>(size);
+        g_used += size;
     }
-    std::memcpy(slot->data, data, size);
-    slot->size = size;
+    std::memcpy(g_data + slot->offset, data, size);
     // kWriteLaterMs after this call, but not later than kWriteLaterMaxMs after the first one
     const int64_t until_max = g_first_us + static_cast<int64_t>(kWriteLaterMaxMs) * 1000 - esp_timer_get_time();
     const int64_t delay = std::clamp<int64_t>(until_max, 1, static_cast<int64_t>(kWriteLaterMs) * 1000);
@@ -116,6 +130,24 @@ esp_err_t set_blob_later(const char *name_space, const char *key, const void *da
 
     esp_timer_stop(g_timer); // not running is fine
     return esp_timer_start_once(g_timer, static_cast<uint64_t>(delay));
+}
+
+bool pending_blob(const char *name_space, const char *key, void *out, size_t size)
+{
+    if (g_lock == nullptr) {
+        return false;
+    }
+    bool found = false;
+    xSemaphoreTake(g_lock, portMAX_DELAY);
+    for (size_t i = 0; i < g_count && !found; i++) {
+        const Pending &p = g_pending[i];
+        if (p.size == size && std::strcmp(p.name_space, name_space) == 0 && std::strcmp(p.key, key) == 0) {
+            std::memcpy(out, g_data + p.offset, size);
+            found = true;
+        }
+    }
+    xSemaphoreGive(g_lock);
+    return found;
 }
 
 void write_pending_settings()
@@ -135,6 +167,7 @@ void discard_pending_settings()
     esp_timer_stop(g_timer);
     xSemaphoreTake(g_lock, portMAX_DELAY);
     g_count = 0;
+    g_used = 0;
     xSemaphoreGive(g_lock);
 }
 

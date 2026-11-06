@@ -57,15 +57,22 @@ esp_err_t erase_all_settings();
 // Delayed writes: the value is kept in RAM and all pending values are written together
 // kWriteLaterMs after the last call, but no later than kWriteLaterMaxMs after the first, so
 // dragging a slider writes the flash once. Pending values are also written when the firmware
-// restarts (esp_restart). Up to kMaxPendingWrites keys (a further one writes the pending ones at
-// once), values up to kMaxPendingSize bytes (the LED styles are the largest). The owner reads its
-// value from its RAM copy, not back from NVS. Any task.
+// restarts (esp_restart). Up to kMaxPendingWrites keys, their values together up to
+// kPendingBytes (a key or a value that does not fit writes the pending ones at once), one value
+// up to kMaxPendingSize bytes (the LED styles are the largest). The owner reads its value from
+// its RAM copy, not back from NVS. Any task.
 constexpr uint32_t kWriteLaterMs = 10000;
 constexpr uint32_t kWriteLaterMaxMs = 60000;
 constexpr size_t kMaxPendingWrites = 8;
-constexpr size_t kMaxPendingSize = 288;
+constexpr size_t kPendingBytes = 1024;
+constexpr size_t kMaxPendingSize = 640;
 
 esp_err_t set_blob_later(const char *name_space, const char *key, const void *data, size_t size);
+
+// The value of `key` that waits to be written, `size` bytes into `out`; false when none waits (or
+// it has another size). For an owner that keeps no RAM copy of its values (the scripts' styles):
+// it reads this first, then NVS.
+bool pending_blob(const char *name_space, const char *key, void *out, size_t size);
 
 // writes the pending values now
 void write_pending_settings();

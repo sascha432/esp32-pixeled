@@ -1,0 +1,36 @@
+// Drift rose as a script, like the built-in "Drift rose": points at their own angles around the
+// middle, each swinging out and through the middle to the other side, the n-th n times as fast as
+// the first (a minute at pace 1): arms wind up and unwind, petals come and go. The points are joined
+// by dim lines, drawn on the trail in the frame block, which fades and blurs.
+anim "Drift rose (Glow)"
+param points = 36 [6 .. 64 step 1] "Points"
+param pace = 1 [0.2 .. 3] "Pace"
+
+frame {
+  fade(min(1, dt * 7))
+  blur(min(1, dt * 8))
+  cx = (W - 1) / 2
+  cy = (H - 1) / 2
+  reach = (min(W, H) - 1) / 2
+  s = t * pace / 58
+  lx = cx
+  ly = cy
+  // once around and back to the first point: the ring is closed
+  for k in 0 .. points + 1 {
+    j = k % points
+    a = j / points
+    r = sin(s * (j + 1)) * reach
+    px = cx + sin(a) * r
+    py = cy + cos(a) * r
+    if k > 0 {
+      pal(a + t / 30, 0.28)
+      line(lx, ly, px, py)
+    }
+    if k < points {
+      pal(a + t / 30, 1)
+      dot(px, py)
+    }
+    lx = px
+    ly = py
+  }
+}

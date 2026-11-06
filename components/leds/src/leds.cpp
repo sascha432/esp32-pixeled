@@ -2,6 +2,7 @@
 
 #include "px/leds/leds.hpp"
 
+#include <atomic>
 #include <cstdio>
 #include <cstring>
 #include <ctime>
@@ -10,6 +11,9 @@
 
 #include "esp_attr.h"
 #include "esp_check.h"
+#if CONFIG_PX_SCRIPTS
+#include "esp_heap_caps.h"
+#endif
 #include "esp_log.h"
 #include "esp_system.h"
 #include "esp_timer.h"
@@ -38,6 +42,19 @@ constexpr const char *kKeyMotion = "motion";
 constexpr const char *kKeyStyles = "styles";
 constexpr const char *kKeyOverlay = "overlay";
 constexpr const char *kKeyBoot = "boot";
+constexpr const char *kKeyHidden = "hidden";
+
+// the animations left out of the lists (leds::hidden): a bit per built-in animation by its index,
+// a bit per script slot
+struct Hidden {
+    uint8_t version = 1;
+    uint32_t animations[(kMaxEffects + 31) / 32] = {};
+    uint32_t scripts = 0;
+};
+#if CONFIG_PX_SCRIPTS
+// the styles and sliders of all slots in one blob, before 2026-11-06: read once, a key per slot now
+constexpr const char *kKeyScripts = "scripts";
+#endif
 
 // what changes while running and is kept over a restart for Config::power_on
 struct Boot {
@@ -77,7 +94,13 @@ struct StylesV3 {
         uint8_t strength;
         uint16_t attack_ms;
         uint16_t release_ms;
-    } style[kMaxEffects];
+    } style[32];
+};
+
+// version 4: the styles of 32 animations
+struct StylesV4 {
+    uint8_t version;
+    Style style[32];
 };
 
 enum class MsgType : uint8_t {
@@ -98,12 +121,40 @@ enum class MsgType : uint8_t {
     Toggle,
     StepBrightness,
     StepEffect,
+#if CONFIG_PX_SCRIPTS
+    // a slot's program (and maybe its sliders) in g_pending_programs; the scripts' styles
+    Script,
+    ScriptStyle,
+#endif
 };
 
 struct Msg {
     MsgType type;
     uint32_t value;
 };
+
+#if CONFIG_PX_SCRIPTS
+// A script that runs (the one shown, the one fading out): its program while it runs, its style, a
+// count of its program's changes (another one starts on clear memory). effect 0: none (0 is never a
+// script's number).
+struct Running {
+    uint8_t effect = 0;
+    const effects::glow::Program *program = nullptr;
+    ScriptStyle style;
+    uint8_t generation = 0;
+    // no program: when to try again
+    int64_t retry_us = 0;
+};
+
+// the running scripts' numbers, styles, programs (once loaded: freed only after they are taken out
+// of here) and slugs for the other tasks (g_lock)
+struct SharedRunning {
+    uint8_t effect = 0;
+    ScriptStyle style;
+    const effects::glow::Program *program = nullptr;
+    char slug[kScriptSlugSize] = {};
+};
+#endif
 
 // everything the task owns; the layout and config of a message wait in g_pending under the lock
 struct Task {
@@ -165,6 +216,18 @@ struct Task {
     uint32_t compose_us = 0;
     uint32_t send_us = 0;
     char error[96] = {};
+    // the animation that shows a text (scrolling text), and its text while it is the time and
+    // date: made once a second
+    size_t text_effect = 0;
+    char text[32] = {};
+    time_t text_time = 0;
+#if CONFIG_PX_SCRIPTS
+    // the scripts that run, at most two (the shown one, the one fading out): nothing of the others
+    // is in RAM; the machine's registers while one of them has its program
+    Running running[2];
+    void *scratch = nullptr;
+    char script_error[80] = {};
+#endif
 };
 
 Task t;
@@ -192,6 +255,15 @@ Styles g_styles = {};
 Styles g_pending_styles = {};
 Overlay g_overlay = {};
 Overlay g_pending_overlay = {};
+Hidden g_hidden = {};
+uint32_t g_hidden_revision = 0;
+#if CONFIG_PX_SCRIPTS
+// Task::running for the other tasks, entry by entry
+SharedRunning g_running[2] = {};
+// the slots with a program and the ones that need sound (set_script_slots)
+std::atomic<uint32_t> g_script_present{0};
+std::atomic<uint32_t> g_script_needs_sound{0};
+#endif
 // the preview (leds::preview): the canvas copied while someone asked within the last 2 s
 uint8_t *g_preview = nullptr;
 size_t g_preview_size = 0;
@@ -309,6 +381,11 @@ void load_config_and_styles()
         save(kKeyStyles, t.styles);
         ESP_LOGI(kTag, "the styles of version 3 taken over");
     }
+    if (StylesV4 old{}; load_old(kKeyStyles, 4, old)) {
+        std::memcpy(t.styles.style, old.style, sizeof(old.style));
+        save(kKeyStyles, t.styles);
+        ESP_LOGI(kTag, "the styles of version 4 taken over");
+    }
     for (Style &style : t.styles.style) {
         style.attack_ms = style.attack_ms > effects::kMaxAttackMs ? Style{}.attack_ms : style.attack_ms;
         style.release_ms = style.release_ms > effects::kMaxReleaseMs ? Style{}.release_ms : style.release_ms;
@@ -329,6 +406,212 @@ void set_off_by_motion(bool off)
         t.off_by_motion = off;
         save_boot();
     }
+}
+
+#if CONFIG_PX_SCRIPTS
+void script_key(size_t slot, char (&key)[16])
+{
+    std::snprintf(key, sizeof(key), "script%u", static_cast<unsigned>(slot));
+}
+
+void check_style(Style &style)
+{
+    style.rotation &= 3;
+    style.palette = style.palette >= effects::palette_count() ? 0 : style.palette;
+    style.attack_ms = style.attack_ms > effects::kMaxAttackMs ? Style{}.attack_ms : style.attack_ms;
+    style.release_ms = style.release_ms > effects::kMaxReleaseMs ? Style{}.release_ms : style.release_ms;
+}
+
+// The stored style and sliders of `slot`: the value waiting to be written, else the one in NVS,
+// else the defaults. Under g_lock.
+ScriptStyle stored_script_style(size_t slot)
+{
+    char key[16];
+    script_key(slot, key);
+    ScriptStyle out;
+    if (!platform::pending_blob(kNamespace, key, &out, sizeof(out)) || out.version != ScriptStyle{}.version) {
+        out = {};
+        load(key, out);
+    }
+    check_style(out.style);
+    return out;
+}
+// A change of a script's style or sliders: its running copy (the task takes it), the stored one 10 s
+// later (the write policy: sliders, Home Assistant numbers); nothing of it stays in RAM otherwise
+template <class Change>
+void change_script_style(size_t slot, Change change)
+{
+    const uint8_t effect = script_effect(slot);
+    char key[16];
+    script_key(slot, key);
+    xSemaphoreTake(g_lock, portMAX_DELAY);
+    size_t k = 0;
+    while (k < std::size(g_running) && g_running[k].effect != effect) {
+        k++;
+    }
+    const bool running = k < std::size(g_running);
+    ScriptStyle s = running ? g_running[k].style : stored_script_style(slot);
+    change(s);
+    check_style(s.style);
+    if (running) {
+        g_running[k].style = s;
+    }
+    if (platform::set_blob_later(kNamespace, key, &s, sizeof(s)) != ESP_OK) {
+        ESP_LOGW(kTag, "the style of script slot %u could not be stored", static_cast<unsigned>(slot));
+    }
+    xSemaphoreGive(g_lock);
+    if (running) {
+        post(MsgType::ScriptStyle);
+    }
+}
+
+// Before 2026-11-06 the styles and sliders of all slots were one blob (key "scripts": the version,
+// the style of each slot and the run, then their sliders): each slot gets its key, the blob goes
+void move_script_styles()
+{
+    platform::Settings settings(kNamespace, platform::Settings::Mode::ReadWrite);
+    uint8_t blob[2 + (16 + 1) * 16];
+    size_t size = sizeof(blob);
+    if (!settings.ok() || settings.get_blob(kKeyScripts, blob, size) != ESP_OK) {
+        return;
+    }
+    const size_t entries = size >= 2 ? (size - 2) / 16 : 0;
+    if (blob[0] == 1 && size == 2 + entries * 16) {
+        // the run (the last) is not kept over a restart
+        for (size_t slot = 0; slot + 1 < entries && slot < kScriptSlots; slot++) {
+            ScriptStyle s;
+            std::memcpy(&s.style, blob + 2 + slot * sizeof(Style), sizeof(Style));
+            std::memcpy(s.sliders, blob + 2 + entries * sizeof(Style) + slot * effects::glow::kMaxParams,
+                        effects::glow::kMaxParams);
+            check_style(s.style);
+            char key[16];
+            script_key(slot, key);
+            settings.set_blob(key, &s, sizeof(s));
+        }
+        ESP_LOGI(kTag, "the scripts' styles stored per slot");
+    }
+    settings.erase(kKeyScripts);
+    settings.commit();
+}
+
+bool runs(uint8_t effect)
+{
+    return effect == t.state.effect || (t.fading && effect == t.fade_effect);
+}
+
+// the machine's registers while a running script has its program: internal RAM is faster
+void update_scratch()
+{
+    bool any = false;
+    for (const Running &r : t.running) {
+        any = any || r.program != nullptr;
+    }
+    if (any && t.scratch == nullptr) {
+        t.scratch = heap_caps_malloc_prefer(effects::glow::scratch_size(), 2, MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT,
+                                            MALLOC_CAP_DEFAULT);
+    } else if (!any && t.scratch != nullptr) {
+        heap_caps_free(t.scratch);
+        t.scratch = nullptr;
+    }
+}
+
+void unload(size_t k)
+{
+    // out of the shared entry first: running_info reads the program under the lock
+    xSemaphoreTake(g_lock, portMAX_DELAY);
+    g_running[k] = {};
+    xSemaphoreGive(g_lock);
+    memory::release_large(const_cast<effects::glow::Program *>(t.running[k].program));
+    t.running[k] = {};
+}
+
+// The scripts that do not run any more give back their programs and the registers: after a
+// crossfade, for another animation; `all` while the LEDs are dark
+void release_scripts(bool all)
+{
+    bool released = false;
+    for (size_t k = 0; k < std::size(t.running); k++) {
+        if (t.running[k].effect != 0 && (all || !runs(t.running[k].effect))) {
+            unload(k);
+            released = true;
+        }
+    }
+    if (released) {
+        update_scratch();
+    }
+}
+
+// The running entry of script animation `effect` (one that runs): taken with its style when it
+// comes on, its program loaded by program_of. Takes g_lock: never called with it held.
+Running *running_for(uint8_t effect)
+{
+    for (Running &r : t.running) {
+        if (r.effect == effect) {
+            return &r;
+        }
+    }
+    for (size_t k = 0; k < std::size(t.running); k++) {
+        Running &r = t.running[k];
+        if (r.effect != 0 && runs(r.effect)) {
+            continue;
+        }
+        if (r.effect != 0) {
+            unload(k);
+        }
+        xSemaphoreTake(g_lock, portMAX_DELAY);
+        r.effect = effect;
+        r.style = stored_script_style(static_cast<size_t>(script_slot(effect)));
+        g_running[k] = {effect, r.style, nullptr, {}};
+        xSemaphoreGive(g_lock);
+        return &r;
+    }
+    return nullptr;
+}
+
+// The program of a running script, loaded from the file system the first time (a file read in this
+// task); nullptr while there is none, tried again a second later
+const effects::glow::Program *program_of(Running &r)
+{
+    if (r.program != nullptr || t.start.load_script == nullptr) {
+        return r.program;
+    }
+    const int64_t now = esp_timer_get_time();
+    if (now < r.retry_us) {
+        return nullptr;
+    }
+    const auto slot = static_cast<size_t>(script_slot(r.effect));
+    char slug[kScriptSlugSize] = {};
+    if (((g_script_present.load() >> slot) & 1u) != 0) {
+        r.program = t.start.load_script(slot, slug);
+    }
+    if (r.program == nullptr) {
+        r.retry_us = now + 1000000;
+        return nullptr;
+    }
+    const auto k = static_cast<size_t>(&r - t.running);
+    xSemaphoreTake(g_lock, portMAX_DELAY);
+    if (g_running[k].effect == r.effect) {
+        g_running[k].program = r.program;
+        std::memcpy(g_running[k].slug, slug, sizeof(slug));
+    }
+    xSemaphoreGive(g_lock);
+    update_scratch();
+    ESP_LOGI(kTag, "script %u loaded, %u bytes of the task's stack never used", static_cast<unsigned>(slot),
+             static_cast<unsigned>(uxTaskGetStackHighWaterMark(nullptr)));
+    return r.program;
+}
+#endif
+
+// the style of animation `effect` (a script's too: one that runs; running_for takes g_lock)
+Style style_for(size_t effect)
+{
+#if CONFIG_PX_SCRIPTS
+    if (script_slot(effect) >= 0) {
+        const Running *r = running_for(static_cast<uint8_t>(effect));
+        return r != nullptr ? r->style.style : Style{};
+    }
+#endif
+    return effect < kMaxEffects ? t.styles.style[effect] : Style{};
 }
 
 // ------------------------------------------------------------------------------------ layout
@@ -460,6 +743,102 @@ bool has_audio_source()
     return t.start.audio != nullptr && (t.start.has_audio == nullptr || t.start.has_audio());
 }
 
+#if CONFIG_PX_SCRIPTS
+// The script of animation `effect` (docs/glow.md); dark when it cannot be drawn. The one shown (not
+// the one fading out) tells why in the status.
+void draw_script(uint8_t effect, effects::Canvas &canvas, const effects::Params &params, uint32_t ms, bool shown)
+{
+    Running *running = running_for(effect);
+    const effects::glow::Program *program = running != nullptr ? program_of(*running) : nullptr;
+    char problem[sizeof(t.script_error)] = {};
+    if (program == nullptr) {
+        std::snprintf(problem, sizeof(problem), "the script is not there, or does not compile");
+    } else if (t.scratch == nullptr) {
+        std::snprintf(problem, sizeof(problem), "no memory for the script's registers");
+    } else {
+        const effects::glow::Result r =
+            effects::glow::render(*program, canvas, params, running->style.sliders, ms, t.scratch);
+        if (r.status == effects::glow::Status::NoMemory) {
+            std::snprintf(problem, sizeof(problem), "the script needs %u bytes of memory, the canvas gives %u",
+                          static_cast<unsigned>(r.need), static_cast<unsigned>(t.memory_size));
+        } else if (r.status == effects::glow::Status::Stopped) {
+            std::snprintf(problem, sizeof(problem), "the script stopped at line %u: too many steps in one frame",
+                          static_cast<unsigned>(r.line));
+        }
+    }
+    if (program == nullptr || t.scratch == nullptr) {
+        std::memset(canvas.pixels, 0, static_cast<size_t>(canvas.width) * canvas.height * sizeof(effects::Rgb));
+    }
+    if (shown && std::strcmp(problem, t.script_error) != 0) {
+        std::memcpy(t.script_error, problem, sizeof(problem));
+        if (problem[0] != 0) {
+            ESP_LOGW(kTag, "%s", problem);
+        }
+    }
+}
+
+// The program of `slot` changed (script_changed): a running one is loaded again with its style and
+// starts on clear memory; one that is gone while shown sends the light back to the first animation
+// (without a crossfade), the one fading out stops
+void take_script_change(size_t slot)
+{
+    const uint8_t effect = script_effect(slot);
+    if (((g_script_present.load() >> slot) & 1u) == 0) {
+        if (t.fading && t.fade_effect == effect) {
+            t.fading = false;
+        }
+        if (t.state.effect == effect) {
+            t.state.effect = 0;
+            save_state_later();
+        }
+    }
+    for (size_t k = 0; k < std::size(t.running); k++) {
+        Running &r = t.running[k];
+        if (r.effect != effect) {
+            continue;
+        }
+        xSemaphoreTake(g_lock, portMAX_DELAY);
+        g_running[k].program = nullptr;
+        r.style = stored_script_style(slot);
+        g_running[k].style = r.style;
+        xSemaphoreGive(g_lock);
+        memory::release_large(const_cast<effects::glow::Program *>(r.program));
+        r.program = nullptr;
+        r.retry_us = 0;
+        r.generation++;
+    }
+    release_scripts(false);
+    update_scratch();
+}
+#endif
+
+// The text of the animations that show one (effects::Params::text): the overlay's while it shows
+// a text (it steps back for them, draw_overlay), else the time and the date once known
+const char *animation_text()
+{
+    const Overlay &o = t.overlay;
+    if (o.mode == OverlayMode::Text && o.text[0] != 0) {
+        return o.text;
+    }
+    const time_t now = std::time(nullptr);
+    if (now < 1700000000) {
+        return nullptr;
+    }
+    if (now != t.text_time) {
+        static constexpr const char kDays[7][4] = {"Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"};
+        static constexpr const char kMonths[12][4] = {"Jan", "Feb", "Mar", "Apr", "May", "Jun",
+                                                      "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"};
+        tm local{};
+        localtime_r(&now, &local);
+        const int hours = o.clock_24h ? local.tm_hour : (local.tm_hour + 11) % 12 + 1;
+        std::snprintf(t.text, sizeof(t.text), "%d:%02d%s %s %d %s", hours, local.tm_min,
+                      o.clock_24h ? "" : (local.tm_hour < 12 ? " AM" : " PM"), kDays[local.tm_wday % 7],
+                      local.tm_mday, kMonths[local.tm_mon % 12]);
+        t.text_time = now;
+    }
+    return t.text;
+}
+
 // animation `effect` with its style on `pixels` (the canvas' size) with its `memory`
 void draw(uint8_t effect, const Style &style, effects::Rgb *pixels, uint8_t *memory, const effects::Audio *audio,
           uint32_t ms)
@@ -483,7 +862,14 @@ void draw(uint8_t effect, const Style &style, effects::Rgb *pixels, uint8_t *mem
                                  .strength = style.strength,
                                  .attack_ms = style.attack_ms,
                                  .release_ms = style.release_ms,
-                                 .palette = style.palette};
+                                 .palette = style.palette,
+                                 .text = animation_text()};
+#if CONFIG_PX_SCRIPTS
+    if (script_slot(effect) >= 0) {
+        draw_script(effect, canvas, params, ms, effect == t.state.effect);
+        return;
+    }
+#endif
     effects::render(effect, canvas, params, ms);
 }
 
@@ -511,7 +897,7 @@ void start_crossfade(uint8_t from)
     // the new animation's memory is cleared with the next frame
     t.memory_for = 0xffffffff;
     t.fade_effect = from;
-    t.fade_style = from < kMaxEffects ? t.styles.style[from] : Style{};
+    t.fade_style = style_for(from);
     t.fade_start_us = esp_timer_get_time();
     t.fading = true;
 }
@@ -520,7 +906,8 @@ void start_crossfade(uint8_t from)
 void draw_overlay(uint32_t ms)
 {
     const Overlay &o = t.overlay;
-    if (o.mode == OverlayMode::Off) {
+    // the animation that shows a text shows the overlay's (animation_text)
+    if (o.mode == OverlayMode::Off || (o.mode == OverlayMode::Text && t.state.effect == t.text_effect)) {
         return;
     }
     effects::Canvas canvas{t.layout.width, t.layout.height, t.canvas};
@@ -605,6 +992,10 @@ void render_frame(int64_t now_us)
         t.dark_sent = true;
         supply(false);
         t.fps = 0;
+#if CONFIG_PX_SCRIPTS
+        // nothing runs: no script keeps its program
+        release_scripts(true);
+#endif
         return;
     }
     if (!t.supply_on) {
@@ -614,9 +1005,20 @@ void render_frame(int64_t now_us)
         return;
     }
     t.dark_sent = false;
-    const Style style = t.state.effect < kMaxEffects ? t.styles.style[t.state.effect] : Style{};
-    // another animation or rotation starts with clear memory
-    const uint32_t memory_for = (static_cast<uint32_t>(t.state.effect) << 8) | style.rotation;
+    const Style style = style_for(t.state.effect);
+    // another animation or rotation starts with clear memory (and a script with another program)
+    uint32_t memory_for = (static_cast<uint32_t>(t.state.effect) << 8) | style.rotation;
+#if CONFIG_PX_SCRIPTS
+    if (script_slot(t.state.effect) >= 0) {
+        // its program before the memory is checked: one loaded now starts on the memory cleared here
+        if (Running *r = running_for(t.state.effect)) {
+            program_of(*r);
+            memory_for |= static_cast<uint32_t>(r->generation) << 16;
+        }
+    } else {
+        t.script_error[0] = 0;
+    }
+#endif
     if (memory_for != t.memory_for) {
         std::memset(t.memory, 0, t.memory_size);
         t.memory_for = memory_for;
@@ -642,6 +1044,10 @@ void render_frame(int64_t now_us)
                            static_cast<uint8_t>(255 - into * 255 / length));
         }
     }
+#if CONFIG_PX_SCRIPTS
+    // a script that went (another animation, the crossfade over) gives back its program
+    release_scripts(false);
+#endif
     draw_overlay(ms);
     copy_preview();
     const int64_t rendered = esp_timer_get_time();
@@ -727,12 +1133,54 @@ void handle(const Msg &msg)
             break;
         }
         const bool audio = has_audio_source();
+        // the ones the user left out of the lists are skipped
+        xSemaphoreTake(g_lock, portMAX_DELAY);
+        const Hidden out_of_lists = g_hidden;
+        xSemaphoreGive(g_lock);
+        const auto left_out = [&](size_t index) {
+            return ((out_of_lists.animations[index / 32] >> (index % 32)) & 1u) != 0;
+        };
+#if CONFIG_PX_SCRIPTS
+        // the animations, then the saved scripts that are there: places 0 .. count + kScriptSlots - 1
+        const size_t places = count + kScriptSlots;
+        const uint32_t present = g_script_present.load();
+        const uint32_t needs_sound = g_script_needs_sound.load();
+        const auto shown = [&](size_t at) {
+            if (at < count) {
+                return !left_out(at) && (audio || effects::info(at)->reactive != effects::Reactive::Required);
+            }
+            const uint32_t bit = 1u << (at - count);
+            return (present & bit) != 0 && (out_of_lists.scripts & bit) == 0 && (audio || (needs_sound & bit) == 0);
+        };
+        const int current = script_slot(t.state.effect);
+        size_t place = current >= 0 && static_cast<size_t>(current) < kScriptSlots
+                           ? count + static_cast<size_t>(current)
+                           : (t.state.effect < count ? t.state.effect : 0);
+        const auto effect_of = [&](size_t at) {
+            return at < count ? static_cast<uint8_t>(at) : script_effect(at - count);
+        };
+        for (int32_t i = 0; i < (steps > 0 ? steps : -steps); i++) {
+            // the next one that can be shown here; at most once around
+            for (size_t tries = 0; tries < places; tries++) {
+                place = steps > 0 ? (place + 1) % places : (place + places - 1) % places;
+                if (shown(place)) {
+                    break;
+                }
+            }
+        }
+        const uint8_t effect = effect_of(place);
+        if (effect != t.state.effect) {
+            start_crossfade(t.state.effect);
+            t.state.effect = effect;
+            save_state_later();
+        }
+#else
         size_t effect = t.state.effect < count ? t.state.effect : 0;
         for (int32_t i = 0; i < (steps > 0 ? steps : -steps); i++) {
             // the next one that can be shown here; at most once around
             for (size_t tries = 0; tries < count; tries++) {
                 effect = steps > 0 ? (effect + 1) % count : (effect + count - 1) % count;
-                if (audio || effects::info(effect)->reactive != effects::Reactive::Required) {
+                if (!left_out(effect) && (audio || effects::info(effect)->reactive != effects::Reactive::Required)) {
                     break;
                 }
             }
@@ -742,6 +1190,7 @@ void handle(const Msg &msg)
             t.state.effect = static_cast<uint8_t>(effect);
             save_state_later();
         }
+#endif
         break;
     }
     case MsgType::Layout:
@@ -825,12 +1274,29 @@ void handle(const Msg &msg)
             apply_layout();
         }
         break;
+#if CONFIG_PX_SCRIPTS
+    case MsgType::Script:
+        take_script_change(msg.value);
+        break;
+    case MsgType::ScriptStyle:
+        // a running script's style or sliders changed (stored by the caller)
+        xSemaphoreTake(g_lock, portMAX_DELAY);
+        for (size_t k = 0; k < std::size(t.running); k++) {
+            if (t.running[k].effect != 0 && g_running[k].effect == t.running[k].effect) {
+                t.running[k].style = g_running[k].style;
+            }
+        }
+        xSemaphoreGive(g_lock);
+        break;
+#endif
     }
 }
 
 void publish()
 {
     const bool has_audio = has_audio_source();
+    // before the lock: a script's comes from its running entry, which takes the lock
+    const Style style = style_for(t.state.effect);
     xSemaphoreTake(g_lock, portMAX_DELAY);
     g_layout = t.layout;
     g_config = t.config;
@@ -838,7 +1304,10 @@ void publish()
     g_auto_off = t.auto_off;
     g_styles = t.styles;
     g_overlay = t.overlay;
-    g_status.style = t.state.effect < kMaxEffects ? t.styles.style[t.state.effect] : Style{};
+    g_status.style = style;
+#if CONFIG_PX_SCRIPTS
+    std::memcpy(g_status.script_error, t.script_error, sizeof(g_status.script_error));
+#endif
     g_status.has_audio = has_audio;
     g_status.hears_audio = t.hears_audio && t.supply_on;
     g_status.has_motion = t.start.has_motion;
@@ -950,7 +1419,9 @@ esp_err_t start(const Start &config)
     load(kKeyLanes, t.lanes);
     load(kKeyMotion, t.auto_off);
     load(kKeyOverlay, t.overlay);
+    load(kKeyHidden, g_hidden);
     t.overlay.text[kOverlayTextSize - 1] = 0;
+    t.text_effect = effects::find("scrolling-text");
     if (static_cast<uint8_t>(t.overlay.mode) > static_cast<uint8_t>(OverlayMode::Clock)) {
         t.overlay = {};
     }
@@ -973,6 +1444,9 @@ esp_err_t start(const Start &config)
     }
     g_pending_styles = t.styles;
     g_pending_overlay = t.overlay;
+#if CONFIG_PX_SCRIPTS
+    move_script_styles();
+#endif
     if (t.auto_off.minutes < 1 || t.auto_off.minutes > kMaxAutoOffMinutes) {
         t.auto_off = {};
     }
@@ -987,7 +1461,12 @@ esp_err_t start(const Start &config)
     if (effects::count() > kMaxEffects) {
         ESP_LOGE(kTag, "more animations than styles (kMaxEffects)");
     }
-    if (t.state.effect >= effects::count() || t.state.effect >= kMaxEffects) {
+    bool known = t.state.effect < effects::count() && t.state.effect < kMaxEffects;
+#if CONFIG_PX_SCRIPTS
+    // a saved script's program comes from px::scripts after the start; the editor's run is gone
+    known = known || (script_slot(t.state.effect) >= 0 && t.state.effect != kRunScript);
+#endif
+    if (!known) {
         t.state.effect = 0;
     }
     if (t.layout.panel_count > kMaxPanels) {
@@ -1036,7 +1515,11 @@ void set_brightness(uint8_t brightness)
 
 void set_effect(size_t index)
 {
-    if (index < effects::count()) {
+    bool known = index < effects::count();
+#if CONFIG_PX_SCRIPTS
+    known = known || script_slot(index) >= 0;
+#endif
+    if (known) {
         post(MsgType::Effect, static_cast<uint32_t>(index));
     }
 }
@@ -1073,13 +1556,24 @@ void set_transition(uint32_t ms)
 
 void set_style(size_t effect, Style style)
 {
-    if (effect >= effects::count() || effect >= kMaxEffects || g_lock == nullptr) {
+    bool known = effect < effects::count() && effect < kMaxEffects;
+#if CONFIG_PX_SCRIPTS
+    const int slot = script_slot(effect);
+    known = known || slot >= 0;
+#endif
+    if (!known || g_lock == nullptr) {
         return;
     }
     style.rotation &= 3;
     style.palette = style.palette >= effects::palette_count() ? 0 : style.palette;
     style.attack_ms = style.attack_ms > effects::kMaxAttackMs ? effects::kMaxAttackMs : style.attack_ms;
     style.release_ms = style.release_ms > effects::kMaxReleaseMs ? effects::kMaxReleaseMs : style.release_ms;
+#if CONFIG_PX_SCRIPTS
+    if (slot >= 0) {
+        change_script_style(static_cast<size_t>(slot), [&](ScriptStyle &s) { s.style = style; });
+        return;
+    }
+#endif
     // all styles wait together: several set at once (the backup) are not lost
     xSemaphoreTake(g_lock, portMAX_DELAY);
     g_pending_styles.style[effect] = style;
@@ -1097,6 +1591,170 @@ Styles styles()
     xSemaphoreGive(g_lock);
     return out;
 }
+
+namespace {
+
+// the word and the bit of animation `effect` in `h`; nullptr for one that is not there
+uint32_t *hidden_bit(Hidden &h, size_t effect, uint32_t &bit)
+{
+#if CONFIG_PX_SCRIPTS
+    if (const int slot = script_slot(effect); slot >= 0) {
+        bit = 1u << slot;
+        return &h.scripts;
+    }
+#endif
+    if (effect >= effects::count() || effect >= kMaxEffects) {
+        return nullptr;
+    }
+    bit = 1u << (effect % 32);
+    return &h.animations[effect / 32];
+}
+
+} // namespace
+
+bool hidden(size_t effect)
+{
+    if (g_lock == nullptr) {
+        return false;
+    }
+    xSemaphoreTake(g_lock, portMAX_DELAY);
+    uint32_t bit = 0;
+    const uint32_t *word = hidden_bit(g_hidden, effect, bit);
+    const bool out = word != nullptr && (*word & bit) != 0;
+    xSemaphoreGive(g_lock);
+    return out;
+}
+
+void set_hidden(size_t effect, bool hide)
+{
+    if (g_lock == nullptr) {
+        return;
+    }
+    xSemaphoreTake(g_lock, portMAX_DELAY);
+    uint32_t bit = 0;
+    uint32_t *word = hidden_bit(g_hidden, effect, bit);
+    const bool changed = word != nullptr && ((*word & bit) != 0) != hide;
+    if (changed) {
+        *word = hide ? *word | bit : *word & ~bit;
+        g_hidden_revision++;
+    }
+    const Hidden copy = g_hidden;
+    xSemaphoreGive(g_lock);
+    if (changed) {
+        // a choice that comes in bursts (a list of checkboxes)
+        save_later(kKeyHidden, copy);
+    }
+}
+
+uint32_t hidden_revision()
+{
+    if (g_lock == nullptr) {
+        return 0;
+    }
+    xSemaphoreTake(g_lock, portMAX_DELAY);
+    const uint32_t out = g_hidden_revision;
+    xSemaphoreGive(g_lock);
+    return out;
+}
+
+Style style_of(size_t effect)
+{
+    if (g_lock == nullptr) {
+        return {};
+    }
+#if CONFIG_PX_SCRIPTS
+    if (const int slot = script_slot(effect); slot >= 0) {
+        return script_style(static_cast<size_t>(slot)).style;
+    }
+#endif
+    xSemaphoreTake(g_lock, portMAX_DELAY);
+    const Style out = g_styles.style[effect < kMaxEffects ? effect : 0];
+    xSemaphoreGive(g_lock);
+    return out;
+}
+
+#if CONFIG_PX_SCRIPTS
+
+void set_script_slots(uint32_t present, uint32_t needs_sound)
+{
+    g_script_present.store(present);
+    g_script_needs_sound.store(needs_sound);
+}
+
+void script_changed(size_t slot)
+{
+    if (slot <= kRunSlot && g_queue != nullptr) {
+        post(MsgType::Script, static_cast<uint32_t>(slot));
+    }
+}
+
+void reset_script_style(size_t slot, const uint8_t *sliders)
+{
+    if (slot > kRunSlot || g_lock == nullptr) {
+        return;
+    }
+    change_script_style(slot, [&](ScriptStyle &s) {
+        s = {};
+        if (sliders != nullptr) {
+            std::memcpy(s.sliders, sliders, sizeof(s.sliders));
+        }
+    });
+    // a slot set free: the next script there is listed
+    if (sliders == nullptr) {
+        set_hidden(script_effect(slot), false);
+    }
+    // a save: written at once
+    platform::write_pending_settings();
+}
+
+ScriptStyle script_style(size_t slot)
+{
+    if (slot > kRunSlot || g_lock == nullptr) {
+        return {};
+    }
+    const uint8_t effect = script_effect(slot);
+    xSemaphoreTake(g_lock, portMAX_DELAY);
+    ScriptStyle out;
+    bool running = false;
+    for (const SharedRunning &r : g_running) {
+        if (r.effect == effect) {
+            out = r.style;
+            running = true;
+        }
+    }
+    if (!running) {
+        out = stored_script_style(slot);
+    }
+    xSemaphoreGive(g_lock);
+    return out;
+}
+
+void set_script_slider(size_t slot, size_t param, uint8_t value)
+{
+    if (slot > kRunSlot || param >= effects::glow::kMaxParams || g_lock == nullptr) {
+        return;
+    }
+    change_script_style(slot, [&](ScriptStyle &s) { s.sliders[param] = value; });
+}
+
+bool running_info(size_t effect, char (&slug)[kScriptSlugSize], effects::glow::Info &info)
+{
+    if (g_lock == nullptr || script_slot(effect) < 0) {
+        return false;
+    }
+    bool found = false;
+    xSemaphoreTake(g_lock, portMAX_DELAY);
+    for (const SharedRunning &r : g_running) {
+        if (!found && r.effect == effect && r.program != nullptr) {
+            std::memcpy(slug, r.slug, sizeof(slug));
+            info = effects::glow::info(*r.program);
+            found = true;
+        }
+    }
+    xSemaphoreGive(g_lock);
+    return found;
+}
+#endif
 
 bool set_layout(const Layout &layout, char *error, size_t error_size)
 {

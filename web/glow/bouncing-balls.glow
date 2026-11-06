@@ -1,0 +1,34 @@
+// Bouncing balls: each falls, bounces off the floor and the walls and leaves a fading trail.
+anim "Bouncing balls"
+param count = 5 [1 .. 16 step 1] "Balls"
+param trail = 0.6 [0 .. 0.95] "Trail"
+var bx[16], by[16], vx[16], vy[16]
+
+init {
+  for k in 0 .. 16 {
+    bx[k] = rand() * (W - 1)
+    by[k] = rand() * (H - 1)
+    vx[k] = (rand() - 0.5) * 16
+  }
+}
+
+frame {
+  fade(1 - trail)
+  // pixels a second, squared
+  g = H * 2
+  for k in 0 .. count {
+    vy[k] += g * dt
+    bx[k] += vx[k] * dt
+    by[k] += vy[k] * dt
+    if bx[k] < 0 { bx[k] = 0; vx[k] = abs(vx[k]) }
+    if bx[k] > W - 1 { bx[k] = W - 1; vx[k] = -abs(vx[k]) }
+    if by[k] > H - 1 {
+      by[k] = H - 1
+      vy[k] = -abs(vy[k]) * 0.85
+      // low bounces start again from up high
+      if vy[k] > -H / 2 { vy[k] = -sqrt(2 * g * H) * (0.7 + rand() * 0.3) }
+    }
+    pal(k / count)
+    disc(bx[k], by[k], 1.5)
+  }
+}

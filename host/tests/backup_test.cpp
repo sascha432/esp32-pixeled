@@ -153,6 +153,23 @@ TEST(backup_writes_header_and_both_parts)
                             "presets:\n"
                             "  count: 0\n");
 
+    // written in pieces (the web server's chunks): the same file
+    String pieces;
+    size_t count = 0;
+    struct Collect {
+        String *text;
+        size_t *count;
+    } collect{&pieces, &count};
+    backup::write(
+        kDevice, kSections, true, true,
+        [](std::string_view piece, void *context) {
+            auto &c = *static_cast<Collect *>(context);
+            c.text->append(piece.data(), piece.size());
+            (*c.count)++;
+        },
+        &collect);
+    CHECK(pieces == text);
+    CHECK(count >= 1);
     const String settings_only = backup::write(kDevice, kSections, true, false);
     CHECK(settings_only.find("presets:") == String::npos);
     const String presets_only = backup::write(kDevice, kSections, false, true);

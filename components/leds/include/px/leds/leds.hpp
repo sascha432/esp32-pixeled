@@ -11,6 +11,12 @@
 //
 // The LED supply is switched through the callback main gives: on before the first frame, then a
 // settle time; off after the LEDs faded out and a dark frame was sent.
+//
+// With CONFIG_PX_SCRIPTS the animation numbers from kScriptBase on are scripts (docs/glow.md). Only
+// the ones that run (the one shown, the one fading out) are in RAM: the task loads a program from
+// the file system when its script comes on (Start::load_script) and frees it when it goes, with its
+// style and sliders (stored per slot, keys "script0" to "script16"; the others are read from there
+// when asked for).
 
 #include <cstddef>
 #include <cstdint>
@@ -19,6 +25,10 @@
 #include "px/effects/effects.hpp"
 #include "px/layout/layout.hpp"
 #include "px/output/output.hpp"
+#include "sdkconfig.h"
+#if CONFIG_PX_SCRIPTS
+#include "px/effects/glow.hpp"
+#endif
 
 namespace px::leds {
 
@@ -119,8 +129,8 @@ struct State {
 
 // The settings of each animation (docs/leds.md sections 6.2 and 6.4): its rotation, whether it
 // follows the audio, how strongly and how fast, its palette. Indexed like px::effects; stored apart
-// (key "styles").
-constexpr size_t kMaxEffects = 32;
+// (key "styles", 514 bytes: the largest of the delayed writes, platform::kMaxPendingSize).
+constexpr size_t kMaxEffects = 64;
 
 struct Style {
     // quarter turns clockwise, 0..3
@@ -137,9 +147,44 @@ struct Style {
 };
 
 struct Styles {
-    uint8_t version = 4;
+    uint8_t version = 5;
     Style style[kMaxEffects] = {};
 };
+
+#if CONFIG_PX_SCRIPTS
+// The scripts (docs/leds.md section 6.5): animation kScriptBase + n is the script in slot n,
+// kRunScript the editor's script that is not saved (slot kRunSlot). The numbers stay apart from
+// the built-in animations, which grow before the test patterns.
+constexpr uint8_t kScriptBase = 200;
+constexpr size_t kScriptSlots = CONFIG_PX_SCRIPT_SLOTS;
+constexpr size_t kRunSlot = kScriptSlots;
+constexpr uint8_t kRunScript = kScriptBase + 16;
+static_assert(kScriptBase + kScriptSlots <= kRunScript, "the slots end before the run's number");
+// a script's slug with its NUL (px::scripts::kSlugSize)
+constexpr size_t kScriptSlugSize = 24;
+
+// the slot of animation `effect`, -1 when it is no script
+inline int script_slot(size_t effect)
+{
+    if (effect == kRunScript) {
+        return static_cast<int>(kRunSlot);
+    }
+    return effect >= kScriptBase && effect < kScriptBase + kScriptSlots ? static_cast<int>(effect - kScriptBase) : -1;
+}
+
+inline uint8_t script_effect(size_t slot)
+{
+    return slot == kRunSlot ? kRunScript : static_cast<uint8_t>(kScriptBase + slot);
+}
+
+// A script's style and its sliders (the params, 0..255). Stored per slot (key "script<slot>", 10 s
+// after the last change); in RAM only while the script runs.
+struct ScriptStyle {
+    uint8_t version = 1;
+    Style style = {};
+    uint8_t sliders[effects::glow::kMaxParams] = {};
+};
+#endif
 
 // Text or the clock over every animation on a matrix (docs/leds.md section 10). Stored apart (key
 // "overlay").
@@ -194,6 +239,10 @@ struct Status {
     bool limited;
     // why nothing is shown ("no layout", "lane 4 has no pin"), empty while it runs
     char error[96];
+#if CONFIG_PX_SCRIPTS
+    // why the script shown draws nothing ("stopped at line 12"), empty while it runs
+    char script_error[80];
+#endif
     // motion auto off: the board has a sensor, what it reports, the seconds until its hold runs
     // out and the LEDs go off (0: it sees motion, or no auto off), and whether motion switched
     // them off
@@ -220,6 +269,13 @@ struct Start {
     // an audio source is set up (the microphone, or a UDP input switched on); nullptr: `audio`
     // alone decides
     bool (*has_audio)() = nullptr;
+#if CONFIG_PX_SCRIPTS
+    // The program of script slot `slot` for the time it runs (px::scripts::load_program) and its slug:
+    // allocated with memory::allocate_large, the task frees it; nullptr when there is none (or not
+    // yet: tried again a second later). Called by the render task when the script comes on: a file
+    // read.
+    const effects::glow::Program *(*load_script)(size_t slot, char (&slug)[kScriptSlugSize]) = nullptr;
+#endif
 };
 
 esp_err_t start(const Start &config);
@@ -227,7 +283,7 @@ bool running();
 
 void set_on(bool on);
 void set_brightness(uint8_t brightness);
-// an index of px::effects; ignored when there is none
+// an index of px::effects (or a script's number); ignored when there is none
 void set_effect(size_t index);
 void set_color(effects::Rgb color);
 void set_speed(uint8_t speed);
@@ -244,6 +300,36 @@ void step_effect(int steps);
 // the rotation, the reactive switch and the strength of animation `effect`; ignored for one that is not there
 void set_style(size_t effect, Style style);
 Styles styles();
+// the style of animation `effect` (a script's too), without a copy of all the styles
+Style style_of(size_t effect);
+
+// Animations left out of the lists (docs/leds.md section 6.6): Home Assistant's effects, the web
+// UI's list, the buttons' steps; set by the user, a bit per built-in animation and per script slot
+// (key "hidden", 10 s after the last change). One that is shown stays where it is.
+bool hidden(size_t effect);
+void set_hidden(size_t effect, bool hidden);
+// changes with every set_hidden that changed something (Home Assistant's effect list)
+uint32_t hidden_revision();
+
+#if CONFIG_PX_SCRIPTS
+// The slots that hold a program (bit n for slot n, the run's at kRunSlot) and the ones of them that
+// need sound: the buttons step through them, a shown one that is gone sends the light back to the
+// first animation. px::scripts after every change.
+void set_script_slots(uint32_t present, uint32_t needs_sound);
+// The program of script slot `slot` changed (saved, deleted, the editor's run): a running one is
+// loaded again and starts on clear memory
+void script_changed(size_t slot);
+// The slot starts again (another script, other params): the default style and these sliders, or
+// all 0 for nullptr (a slot set free); written at once
+void reset_script_style(size_t slot, const uint8_t *sliders);
+// The style and the sliders of the script in `slot`: its running copy, else the stored one
+ScriptStyle script_style(size_t slot);
+// The slug and the program's info (name, params) of script animation `effect` while it runs with
+// its program: from RAM, no file read (the web API's answers while the LEDs render); false else
+bool running_info(size_t effect, char (&slug)[kScriptSlugSize], effects::glow::Info &info);
+// a slider (param `param`, 0..255) of the script in `slot`
+void set_script_slider(size_t slot, size_t param, uint8_t value);
+#endif
 
 // Checks the layout (px::layout::build) and, when it is usable, hands it to the task, which
 // stores it. false with the problem in `error` otherwise.

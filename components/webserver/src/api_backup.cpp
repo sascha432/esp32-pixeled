@@ -14,6 +14,7 @@
 #include <cstdio>
 #include <cstring>
 
+#include "esp_heap_caps.h"
 #include "px/memory/large.hpp"
 #include "px/webserver/webserver.hpp"
 
@@ -41,15 +42,27 @@ esp_err_t get_backup(httpd_req_t *req)
     if (!settings && !presets) {
         return send_error(req, "400 Bad Request", "parts: settings or presets");
     }
-    const memory::String text = g_backup->export_file(settings, presets);
-
     char disposition[96];
     std::snprintf(disposition, sizeof(disposition), "attachment; filename=\"%s-%s.yaml\"", g_device_name,
                   settings && presets ? "backup" : settings ? "settings" : "presets");
     httpd_resp_set_type(req, "application/yaml; charset=utf-8");
     httpd_resp_set_hdr(req, "Cache-Control", "no-store");
     httpd_resp_set_hdr(req, "Content-Disposition", disposition);
-    return httpd_resp_send(req, text.data(), static_cast<ssize_t>(text.size()));
+    // in chunks as it is written; a client that went away gets no more
+    struct Out {
+        httpd_req_t *req;
+        esp_err_t err;
+    } out{req, ESP_OK};
+    g_backup->export_file(
+        settings, presets,
+        [](std::string_view piece, void *context) {
+            auto &o = *static_cast<Out *>(context);
+            if (o.err == ESP_OK) {
+                o.err = httpd_resp_send_chunk(o.req, piece.data(), static_cast<ssize_t>(piece.size()));
+            }
+        },
+        &out);
+    return out.err == ESP_OK ? httpd_resp_send_chunk(req, nullptr, 0) : out.err;
 }
 
 void lines(JsonWriter &json, const char *key, const memory::Vector<memory::String> &values)
@@ -76,6 +89,20 @@ esp_err_t post_import(httpd_req_t *req)
                    : send_error(req, "400 Bad Request", "the request is empty or larger than 256 KB");
     }
     char *body = *read;
+    // The file is read into a tree of strings, which cannot fail softly (3.1 times its size at the
+    // most, measured with a 32-bit build for a backup of 19 KB with 12 scripts and one of 4.6 KB),
+    // and a script in it is compiled (23 KB): a file the free memory cannot hold that way is refused
+    // rather than stop the device (an ESP32 without PSRAM, a backup with many scripts)
+    const size_t need = length * 7 / 2 + 28 * 1024;
+    const size_t free_bytes = heap_caps_get_free_size(MALLOC_CAP_8BIT);
+    if (free_bytes < need) {
+        memory::release_large(body);
+        char message[112];
+        std::snprintf(message, sizeof(message), "not enough memory to read a backup of %u KB: about %u KB needed, %u KB free",
+                      static_cast<unsigned>(length / 1024 + 1), static_cast<unsigned>(need / 1024),
+                      static_cast<unsigned>(free_bytes / 1024));
+        return send_error(req, "503 Service Unavailable", message);
+    }
     const BackupReport report = g_backup->import_file(std::string_view(body, length), check_only);
     memory::release_large(body);
 

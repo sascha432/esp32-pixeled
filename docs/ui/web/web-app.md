@@ -18,6 +18,8 @@ Main pages                after login (the first one: Control), in the menu's gr
                           rotation, sound, the state (with the motion's); presets; overlay
   Sound                   the bands live, where the sound comes from, the UDP inputs, the
                           microphone's settings (with the audio input)
+  Scripts                 animations in Glow: the editor with Run and Save, the preview, the
+                          sliders of the one shown, the saved ones (CONFIG_PX_SCRIPTS)
  Hardware
   LED settings            power and timing; motion auto off (with a sensor)
   Layout                  canvas size, panels (lane, place, size, first LED, runs, zigzag),
@@ -152,7 +154,42 @@ min without motion", "switched off by motion, on with the next motion"). Followe
 matches) with Show and Delete (asks first), and a name with "Save the light" (the light as it is
 now; a name that is there is replaced; up to 16). Showing one sets the light card's controls.
 The card "Overlay": show nothing, text or the clock, the color, the text (63 bytes, scrolling
-when wider than the matrix) with its scroll speed, or 24 hours for the clock; Save.
+when wider than the matrix) with its scroll speed, or 24 hours for the clock; Save. The animation
+Scrolling text runs the overlay's text while Show is Text (the overlay then steps back for it),
+else the time and the date ([leds.md](../../leds.md) section 6.3).
+
+With the scripts (`CONFIG_PX_SCRIPTS`) the animation list has the saved scripts after the
+animations, and a script's sliders (its `param` lines: the label and the value, from `shown`)
+sit under the speed; they send like the others (`p0` to `p7`, 0 to 255) and are kept for each
+script. The list leaves out the animations not ticked on LED settings (the one shown stays).
+
+**Scripts** (only with `CONFIG_PX_SCRIPTS`; `web/scripts.js`, loaded by its page; the language:
+[glow.md](../../glow.md)). The card "Live" as on Control. The card "Editor": the file name (a-z,
+0-9 and -, up to 23), "Start from" an empty script or one of the examples (`web/glow`, fetched as
+`/glow/<name>.glow`), the text with line numbers (Tab indents two spaces, Ctrl+Enter runs, Ctrl+S
+saves), the error of the last Run or Save ("line 3, column 3: unknown function 'hsb'", the line
+selected and its number red), and Delete (asks first), Revert, Run (compiles on the device and
+shows it without saving: the animation "run") and Save (writes the file, compiles it and shows it;
+a script that does not compile is saved, and the program before runs on, a toast says so). The
+card "Shown: <name>" (while the light shows a script): its sliders, and why it draws nothing (it
+stopped at a line, needs more memory). The card "Saved (n of 16)": each script's name, file, size
+and program size, "error" and "shown" badges; a click opens it in the editor (asks before it
+drops changed text). The card "The language": a short reference. The page parses nothing: the
+device compiles. Followed live: `/api/scripts` and `/api/leds`.
+
+API (`components/leds_api/src/api_scripts.cpp`):
+
+| Request | Answer |
+| --- | --- |
+| `GET /api/scripts` | `{"slots", "stack", "scripts": [...], "run": ... or null}`; a script: `slot`, `slug`, `name`, `ok`, `error` (`{line, column, text}` or null), `size`, `program`, `reactive`, `color`, `palette`, `params` (`name`, `label`, `min`, `max`, `step`, `slider`, `value`; for the script shown, empty for the others: their programs are not read for a list) |
+| `GET /api/scripts/source?slug=<slug>` | the source, text/plain; 404 |
+| `POST /api/scripts/save?slug=<slug>` | the source as the body (text/plain): `{"ok", "error"}`; 400 a bad slug, 507 no free slot |
+| `POST /api/scripts/run` | the source as the body: `{"ok", "error"}`, shown as the animation `run` |
+| `POST /api/scripts/delete?slug=<slug>` | `{"ok": true}`; 404 |
+
+`/api/leds` lists the scripts in `effects` (`"script": true`), has the shown one's sliders in
+`shown` (`params` with `label`, `slider`, `value`), takes `effect=<slug>` of one and `p0..p7` for
+the shown one, and has `script_error`.
 
 **Sound.** The card "Sound input": 32 bars of the bands (bass on the left, grey in silence),
 where the sound comes from (microphone, WARLS, WLED audio sync, nothing), the input (sound with a
@@ -164,7 +201,9 @@ inputs: WARLS (a switch and its port) and WLED audio sync (a switch); with a mic
 form: gain (dB), automatic gain, silence below (dB), range (dB), beat threshold (times the bass),
 with a hint how they work together.
 
-**LED settings.** The card "Power and timing" is a form with Save: the power limit in W (0:
+**LED settings.** The card "Animations in the lists": a box per animation and script, ticked
+for the ones in the lists; one not ticked is left out of Control's list, Home Assistant's effects
+and the buttons' steps (`hide`, `show`, saved on change). The card "Power and timing" is a form with Save: the power limit in W (0:
 none), frames per second, fade time, supply settle time, the crossfade between animations (ms,
 0: none), what the LEDs do at power on (as before, off, on), the power model (one color of one LED
 at full, one LED while dark, in mW), with the hint that the estimate can be compared with a meter
@@ -184,10 +223,13 @@ a line on what turning it does. A board without any says so.
 
 Code: `components/leds`, `components/leds_api`, `components/presets`, `components/input`,
 `web/leds.js`. API: `GET /api/leds` (state,
-status, the list of animations with `slug`, `name`, `color`, `palette`, `reactive`, the list of
-`palettes` with `slug` and `name`, and `config`),
+status, `shown` (the animation shown: `slug`, `name`, `script`, a script's `params`), the list of
+animations with `slug`, `name`, `color`, `palette`, `reactive`, `hidden` (only GET: the answers
+and the live pushes leave it out, the pages keep theirs), the list of `palettes` with `slug` and
+`name`, and `config`),
 `POST /api/leds` (any of `on`, `brightness`, `effect` (a slug), `color` (`#rrggbb`), `speed`,
-`auto_off` (`1`, `0`), `auto_off_minutes`, `rotation` (`0`, `90`, `180`, `270`) and `reactive`
+`auto_off` (`1`, `0`), `auto_off_minutes`, `hide` and `show` (a slug: out of the lists, back in),
+`rotation` (`0`, `90`, `180`, `270`) and `reactive`
 (`1`, `0`), `strength` (0 to 255), `attack` (0 to 2000 ms), `release` (0 to 5000 ms) and
 `palette` (a slug) for the
 animation given in the same request, else the current one; answers like GET; GET has `rotation`,
@@ -297,8 +339,10 @@ backup card sits above the update card, so the backup is seen before an update.
 Backup: one YAML file in two parts, the settings (the sections `network`, `leds` (state, power
 and timing, canvas and panels, the animations' styles), `audio`, `mqtt`, `time`, `input` (the
 buttons' actions, with buttons) and `webui`, import only, section 3) and the presets (section
-`presets`: the whole list in its order, an import replaces it); Export all,
-Settings only, Presets only (`GET /api/backup.yaml[?parts=settings|presets]`). A section of
+`presets`: the whole list in its order, an import replaces it; with `CONFIG_PX_SCRIPTS` also the
+section `scripts`: each one's source, style and sliders, an import compiles them all first and
+replaces them); Export all, Settings only, Presets only ("Presets and scripts" with the scripts)
+(`GET /api/backup.yaml[?parts=settings|presets]`). A section of
 something the device does not have is not written, and in a file from another device it is
 ignored ("... (not on this device)"). No password is written; a Wi-Fi `password:` added to the
 file by hand is used. Import and Check upload the file (`POST /api/backup/import[?check=1]`): the

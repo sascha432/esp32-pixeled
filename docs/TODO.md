@@ -6,6 +6,67 @@ outputs with their DMA ring; phase 6 has the microphone, WARLS and WLED audio sy
 4 has 13 animations, the crossfade, palettes and presets; phase 7 the buttons and the encoder;
 phase 8 the live preview and the overlay ([leds.md](leds.md) section 11).
 
+State 2026-11-06, scripts only in RAM while they run: the render task loads the program of the
+script shown (and of the one fading out) from the file system and gives it back when it goes and
+while the LEDs are dark; the lists read `/fs/scripts/index.bin`, the styles and sliders have an NVS
+key per slot; up to 16 scripts. Animations can be left out of the lists (LED settings, `hide`,
+`show`, Home Assistant, the buttons, the backup). Five more examples from built-in animations
+(Julia, Fireworks 1D, DNA spiral, Sun radiation, Drift rose; twelve in all). Host tested (127),
+the test board's firmware built and flashed many times on the way; there with twelve scripts
+(`full_test.py` in the session's scratchpad, 37 of 37): each example saved, shown, sliders and
+picture right (0.5 to 9.6 ms a frame, Julia the slowest at 52 fps); 96 KB free with a built-in
+animation, 88 KB with a script, the RAM given back while the LEDs are off; a slider kept while
+the script did not run and after a restart; saved while shown (the same params keep the sliders,
+others start again), deleted while shown (the first animation), the editor's run; hidden ones out
+of `/api/leds`' list flags, Home Assistant's effect list (53 then) and the buttons' step, still
+chosen by slug; the backup streamed (19 KB) and its settings part checked. 36 saves and shows in
+a row without a stop. Found and fixed on the way: a self-deadlock of the render task (the status
+took the lock twice), the web server spinning in a save (the compile task got no time: the task
+watchdog), the backup export (a file of 30 KB in RAM at once) and import (the tree of strings)
+stopping the device for want of memory, Home Assistant's announce per script change queueing tens
+of KB, the sliders of scripts found without a slot at 0, the API reading files with every push
+(the render task stalled: Plasma 4.8 ms instead of 1.3). `tools/test_web.py` 71 of 71 there (one
+run before cut off a download of two `files.zip` at once: see the open point below; the tool now
+counts it as a failed check). The four other boards' main firmware, the recovery apps of the ESP32
+and the S3 and the ESP32 without the scripts build. The tests ran at brightness 40 (Sun radiation
+draws 10 W at 76); the light is back on Octopus (Glow), brightness 76 (5.6 W). Open: the pages in
+a browser (LED settings' boxes, Control's list), a backup with many scripts on an ESP32 without
+PSRAM (refused, see below).
+
+State 2026-11-06, Octopus: the Glow example "Octopus (Glow)" (`web/glow/octopus-glow.glow`, with
+legs and offset sliders), host tested; saved on the test board and shown: through the preview the
+same picture as the built-in Octopus, 2.1 to 2.7 ms a frame (the built-in 1.3; the same script
+working out `atan2` and `hypot` every frame 3.2), 83 to 89 fps. Seen on the way: with the user's
+page open the board had 70 KB of internal RAM free (33 KB 8-bit), the Wi-Fi driver logged a failed
+1.6 KB allocation and two requests timed out or were reset; the board ran on (see the open point
+on `files.zip`).
+
+State 2026-11-06: the Glow example "Fire 2012 (Glow)" (`web/glow/fire-2012-glow.glow`), host
+tested; saved on the WLED controller rev 1.1 (COM7) and shown there: through the preview it burns
+like the built-in Fire 2012 (a few white sparks fewer at the very bottom: a spark goes up with the
+same step instead of staying a step in its cell), 2.2 ms a frame (the built-in 0.5), 95 fps, 5.7 W
+at brightness 76. The board's web image updated with `build_fs.py --device` (its six scripts and
+presets kept), so the Scripts page offers it under "Start from"; the first try's `files.zip`
+download timed out (the user's page open), the second went through.
+
+State 2026-11-05, WLED's second set: seventeen more animations after WLED's (DNA spiral, drift,
+drift rose, Fire 2012, firenoise, fireworks, fireworks 1D, ghost rider, hiphotic, octopus, Julia,
+Lissajous, polar lights, scrolling text, sindots, soap, sun radiation; [leds.md](leds.md) section
+6.3; WLED's Matrix is the Matrix rain there was), host tested (127 tests) and looked at as frames
+rendered on the PC; the styles hold 64 animations (version 5, version 4 taken over: fire kept its
+strength on the test board), the delayed settings share 1 KB (a style written 10 s later is
+there after a restart). Flashed on the WLED controller rev
+1.1 (COM7, over the network): each runs at 94 to 100 fps (0.4 to 1.5 ms per frame, the median), at
+most 5.2 W at brightness 30, turned by a quarter, with a palette, at speed 0; Scrolling text seen
+through the preview (the time and date in the middle rows; the overlay's text with the overlay
+stepping back, which draws again over plasma); Home Assistant's effect list has them (1063
+bytes of its 1536), "Polar lights" chosen by name over MQTT. With the demo of
+`tools/audio_send.py` over WARLS and "Reacts to sound" on, each heard it and ran at 90 to 100 fps
+(0.6 to 3.3 ms). The light is back on fire, brightness 39, overlay off, WARLS off, their sound
+switches off. `tools/test_web.py` 70 of 71 there: two `files.zip` at once run out of memory (an
+open point under the web server below, not from this change: its static RAM is lower). Open: how
+they look on the matrix (for the user's eyes).
+
 State 2026-11-05: twelve animations after WLED's 2D ones (colored bursts, blobs, distortion waves,
 waverly and the particle ones PS vortex, fuzzy noise, waterfall, GEQ 2D, GEQ nova, ghost rider,
 blobs, galaxy; [leds.md](leds.md) section 6.3), host tested and looked at as frames rendered on
@@ -14,6 +75,29 @@ per frame), in silence and with the demo of `tools/audio_send.py` over WARLS (so
 GEQs light only with it), turned by a quarter, with a palette, at speed 0; no reset. Their "Reacts
 to sound" is on there; the board is back on fire, brightness 52, WARLS off. Open: how they look on
 the matrix (for the user's eyes).
+
+State 2026-11-05, scripts: Glow ([glow.md](glow.md)) built and host tested (124 tests, the
+1-lane against the 32-lane machine among them); the four boards' main firmware and the recovery
+apps of the ESP32 and S3 build; with `CONFIG_PX_SCRIPTS` off the test board's firmware has the
+static RAM of before, 432 bytes less code and no symbol of it. Flashed on the WLED controller rev
+1.1 (COM7), the scripts put on its file system: the five examples compile at boot and run (plasma
+1.31 ms a frame at 768 LEDs, the built-in plasma 0.69; fire 0.74, balls 0.6, rings 1.7, lava 3.3),
+one with an error lists its line, an endless loop stops with its line while the LEDs run on at 99
+fps, the deepest scripts compile with 5.4 KB of the compiler's 8 KB stack. Over the web API
+there (login admin): `tools/test_web.py` 71 of 71; run with and without an error, save, a save
+with an error (the program before runs on), a taken name, a slider and the rotation of a script,
+a preset of one, the backup's presets part with the scripts exported, checked and imported, one
+that does not compile refused, an endless loop stopped, and after a restart the script, its slider
+and its rotation as they were; a deleted script shown goes back to the first animation. Found and
+fixed there: a backup's scripts ran out of memory (a compile task that deleted itself kept its
+stack until the idle task ran; now the caller deletes it), the sliders of the backup were listed
+as ignored, and two examples had the slugs of built-in animations (they have their own names now,
+and no script takes a built-in's slug). The Scripts page looked at in headless Edge against a
+stand-in of the API (600 and 1100 px, light and dark). The board keeps the five examples; the
+light is back on fire, brightness 39, the clock overlay. Home Assistant over the user's broker
+(192.168.0.4): the light's effect list has the five scripts after the animations, a saved one comes
+into it and a deleted one leaves it (announced again), one chosen by its name over MQTT is shown and
+the state names it. Open: the page in a browser against the board.
 
 State 2026-11-05, memory: a full heap no longer stops the firmware (`allocate_large` returns
 null); tried on the WLED controller rev 1.1 with a 128 x 64 layout ("no memory for the frame", the
@@ -36,7 +120,10 @@ open (phase 1).
 
 **For the user's eyes (built 2026-11-05):** the twelve animations after WLED's on the matrix, with
 the music and without (Control, the animation list after Noise); WLED's extra sliders are fixed
-values: say where one should be different.
+values: say where one should be different. The same for the second set of seventeen (after PS
+galaxy in the list); Scrolling text shows the overlay's text (Overlay, Show: Text) or the time and
+the date. Whether WLED's Matrix should be a second one in WLED's greens, beside Matrix rain in the
+light's color.
 
 **For the user's eyes (built 2026-10-21, not looked at on the LEDs):** the seven new animations
 (gradient, color fade, twinkle, meteor, ripple, matrix rain, noise) with and without sound, the
@@ -126,11 +213,14 @@ rule in place of a name (2026-10-22): the web UI works on the test matrix.
 
 **NVS write policy (2026-10-21, [architecture.md](architecture.md) section 9.3):** the delayed
 write ported from hassctrl (10 s, at most 60 s, 8 keys, discarded by a factory reset); the LED
-styles take it. Not tried: the factory reset path (it erases the test board's settings).
+styles take it. Since 2026-11-05 the values share 1 KB (the styles of 64 animations are 514
+bytes). Not tried: the factory reset path (it erases the test board's settings).
 
 ## Decide
 
 * The animation list ([leds.md](leds.md) section 6.3): what to add, what to drop, the palettes.
+* Scrolling text: a text of its own (now the overlay's, Show: Text) and a larger font on a tall
+  canvas (WLED has five sizes; here the overlay's 5 x 7).
 * The open hotspot of the first setup ([architecture.md](architecture.md) section 9.1): keep it
   open, or a fixed default password printed on the device.
 
@@ -165,6 +255,19 @@ styles take it. Not tried: the factory reset path (it erases the test board's se
   44 KB entry list at once; it grows with the files now). Open: the pages in a browser (Status,
   Wi-Fi, Hotspot, MQTT, Time, LEDs: pushes, a hidden tab, the preview closing and opening),
   `build_fs.py --device` on a device with presets, `test_web.py` against the recovery app.
+  Open (found 2026-11-05 on the test board, 77 KB of internal RAM free with the five scripts
+  loaded and MQTT connected; 138 KB on 2026-11-02): two `files.zip` at once run out of memory
+  while they send. Their archives are valid but miss files ("cannot be opened", "no memory to
+  list it" in `unreadable.txt`), and the API answers after 1 to 4 s instead of at once, so
+  `test_web.py` gives 70 of 71 there (one alone: complete, the API at once). 2026-11-06, with
+  twelve scripts on the file system: once a download was cut off, the next run 71 of 71. The cause is not
+  measured; likely the two downloads' Wi-Fi and TCP buffers and their 12 KB each on a smaller
+  heap. Possibly one `files.zip` at a time (the second 503).
+  Open (2026-11-06): a backup import is read into a tree of strings (3.1 times the file, measured
+  with a 32-bit build) that cannot fail softly; one the free memory cannot hold is refused with
+  503 before it is parsed. On the test board (ESP32 without PSRAM) a backup with twelve scripts
+  (19 KB) is refused, its settings part alone imports. A reader that keeps the scripts' sources in
+  the request's buffer, or the scripts outside the YAML (a zip with the files), would lift it.
 * **Task stacks** (2026-11-03, `mem tasks` on the test board, ESP32 without PSRAM, trace facility
   on for the measurement): `tools/test_web.py` (63 of 63) and every web API, the live socket with
   the LEDs page's three paths (now Control's two) and the preview, two `files.zip` at once, a Wi-Fi scan, a backup
@@ -338,6 +441,17 @@ styles take it. Not tried: the factory reset path (it erases the test board's se
 * UDP spectrum built 2026-10-21: WARLS and WLED audio sync, tried with `tools/audio_send.py`
   (the bands arrive). Open: LedFx or a WLED device as the sender. The animations after WLED's ran
   fed by the WARLS demo on the test board 2026-11-05 (sound heard); the reactions not looked at.
+
+## Scripts (Glow, built 2026-11-05)
+
+Animations as scripts ([glow.md](glow.md)), `CONFIG_PX_SCRIPTS`. Open:
+
+* A preset keeps a script's number and style, not its sliders: the sliders stay as the script has
+  them (presets.bin would need another version).
+* The sliders as Home Assistant numbers (the light's effect list has the scripts already).
+* The editor: no syntax colors, no completion (a textarea with line numbers).
+* The speed at 8192 LEDs on the S3 (measured so far: the test board, 768 LEDs).
+* Playlists of scripts come with the playlists.
 
 ## Phase 4 and later
 

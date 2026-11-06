@@ -76,6 +76,8 @@ struct Params {
     uint16_t release_ms = 250;
     // an index of the palettes (palette_info), 0: the animation's own colors
     uint8_t palette = 0;
+    // the text of the animations that show one (scrolling text), UTF-8; nullptr: their own
+    const char *text = nullptr;
 };
 
 constexpr uint16_t kMaxAttackMs = 2000;

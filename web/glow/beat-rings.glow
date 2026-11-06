@@ -1,0 +1,14 @@
+// Beat rings: rings run out of the middle, faster and brighter with the sound; a beat moves the
+// colors on. Without sound they run slowly and dim.
+anim "Beat rings"
+var phase, shift
+
+frame {
+  phase += dt * (0.5 + level * 2)
+  if beat { shift += 0.12 }
+}
+
+pixel {
+  d = hypot(u - 0.5, v - 0.5) * 2
+  hsv(d / 3 + shift, 1, wave(d * 3 - phase) * (0.35 + level * 0.65))
+}

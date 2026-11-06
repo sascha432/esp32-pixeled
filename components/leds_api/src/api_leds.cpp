@@ -1,13 +1,19 @@
 // The LEDs in the web API (docs/ui/web/web-app.md section 4), login required:
 //
-//   GET  /api/leds            the state, the status of the render task, the animations, the
-//                             palettes, the config, the overlay
+//   GET  /api/leds            the state, the status of the render task, "shown" (the animation
+//                             shown: slug, name, script, a script's params with their sliders),
+//                             the animations ("effects": slug, name, color, palette, reactive,
+//                             hidden; the scripts (CONFIG_PX_SCRIPTS) after them with "script":
+//                             true), the palettes, the config, the overlay
 //   POST /api/leds            any of on=1|0, brightness=0..255, effect=<slug>, color=#rrggbb,
-//                             speed=0..255, auto_off=1|0, auto_off_minutes=1..240, and for the
-//                             animation (the one given, else the current one) rotation=0|90|180|270,
-//                             reactive=1|0, strength=0..255, attack=0..2000, release=0..5000 (ms) and
-//                             palette=<slug>; answers like GET
+//                             speed=0..255, auto_off=1|0, auto_off_minutes=1..240, hide=<slug>,
+//                             show=<slug> (out of the lists, back in), and for the animation (the
+//                             one given, else the current one) rotation=0|90|180|270, reactive=1|0,
+//                             strength=0..255, attack=0..2000, release=0..5000 (ms), palette=<slug>
+//                             and a script's sliders p0..p7=0..255; answers like GET without
+//                             "effects" (the live socket's pushes the same: the pages keep theirs)
 //   GET  /api/presets, POST /api/presets/save|apply|delete: api_presets.cpp
+//   GET  /api/scripts, /api/scripts/source, POST /api/scripts/save|run|delete: api_scripts.cpp
 //   GET  /api/leds/layout     {"width", "height", "available_lanes", "panels": [{"lane", "x", "y",
 //                             "width", "height", "first": "tl|tr|bl|br", "runs": "rows|columns",
 //                             "zigzag"}]}
@@ -51,6 +57,11 @@
 #include "px/webserver/http.hpp"
 
 #include "api_presets.hpp"
+#if CONFIG_PX_SCRIPTS
+#include "px/scripts/scripts.hpp"
+
+#include "api_scripts.hpp"
+#endif
 
 namespace px::leds_api {
 
@@ -119,13 +130,73 @@ bool form_number(httpd_req_t *req, const char *body, const char *key, long min, 
     return true;
 }
 
-// GET /api/leds, pushed on the live socket as well
-void write_leds(JsonWriter &json)
+#if CONFIG_PX_SCRIPTS
+const char *reactive_name(effects::Reactive reactive)
+{
+    return reactive == effects::Reactive::Never      ? "never"
+           : reactive == effects::Reactive::Optional ? "optional"
+                                                     : "required";
+}
+
+struct EffectsContext {
+    JsonWriter *json;
+    int shown;
+};
+
+// the saved scripts in the list of animations, and the editor's run (the index, read once); the
+// sliders of the one shown are in "shown"
+void write_script_effects(JsonWriter &json)
+{
+    EffectsContext c{&json, -1};
+    scripts::each(
+        [](size_t slot, const scripts::Script &s, void *context) {
+            auto &c = *static_cast<EffectsContext *>(context);
+            if (s.program_size == 0) {
+                return;
+            }
+            c.json->begin_object()
+                .string("slug", s.slug)
+                .string("name", s.name)
+                .boolean("color", s.uses_color)
+                .boolean("palette", s.uses_palette)
+                .string("reactive", reactive_name(s.reactive))
+                .boolean("hidden", leds::hidden(leds::script_effect(slot)))
+                .boolean("script", true)
+                .end_object();
+        },
+        &c);
+}
+#endif
+
+// The state of the LEDs: GET /api/leds with `list` (the animations: the pages draw their lists
+// from it), the answers to a change and the live socket's pushes (every 2 s while a page shows one)
+// without it; "shown" has what the animation shown is, its sliders too. Nothing of it is read from
+// the file system while a script runs: a file read stops the code in flash on both cores, the
+// rendering too (the list of the scripts is read, once, for the GET only).
+void write_state(JsonWriter &json, bool list)
 {
     const leds::Status s = leds::status();
     const leds::Config c = leds::config();
     const leds::Overlay o = leds::overlay();
     const effects::Info *effect = effects::info(s.state.effect);
+    const char *effect_slug = effect != nullptr ? effect->slug : "";
+    const char *effect_name = effect != nullptr ? effect->name : "";
+#if CONFIG_PX_SCRIPTS
+    char script_slug[scripts::kSlugSize] = {};
+    char script_name[effects::glow::kNameSize] = {};
+    if (effect == nullptr) {
+        auto *info = static_cast<effects::glow::Info *>(memory::allocate_large(sizeof(effects::glow::Info)));
+        if (info != nullptr && leds::running_info(s.state.effect, script_slug, *info)) {
+            std::memcpy(script_name, info->name, sizeof(script_name));
+        } else {
+            // not running (the LEDs off): from the index
+            scripts::names(s.state.effect, script_slug, script_name);
+        }
+        memory::release_large(info);
+        effect_slug = script_slug;
+        effect_name = script_name;
+    }
+#endif
     char color[8];
     color_text(s.state.color, color);
     char overlay_color[8];
@@ -134,7 +205,7 @@ void write_leds(JsonWriter &json)
         .boolean("on", s.state.on)
         .number("brightness", s.state.brightness)
         .number("level", s.level)
-        .string("effect", effect != nullptr ? effect->slug : "")
+        .string("effect", effect_slug)
         .string("color", color)
         .number("speed", s.state.speed)
         .number("rotation", s.style.rotation * 90)
@@ -156,6 +227,9 @@ void write_leds(JsonWriter &json)
         .number("power_mw", s.power_mw)
         .boolean("limited", s.limited)
         .string("error", s.error)
+#if CONFIG_PX_SCRIPTS
+        .string("script_error", s.script_error)
+#endif
         .begin_object("motion")
         .boolean("sensor", s.has_motion)
         .boolean("detected", s.motion)
@@ -168,8 +242,21 @@ void write_leds(JsonWriter &json)
         .number("height", s.height)
         .number("leds", s.leds)
         .number("lanes", s.lanes)
-        .begin_array("effects");
-    for (size_t i = 0; i < effects::count(); i++) {
+        .begin_object("shown")
+        .string("slug", effect_slug)
+        .string("name", effect_name)
+        .boolean("script", effect == nullptr)
+        .begin_array("params");
+#if CONFIG_PX_SCRIPTS
+    if (effect == nullptr && leds::script_slot(s.state.effect) >= 0) {
+        write_script_params(json, static_cast<size_t>(leds::script_slot(s.state.effect)), false);
+    }
+#endif
+    json.end_array().end_object();
+    if (list) {
+        json.begin_array("effects");
+    }
+    for (size_t i = 0; i < effects::count() && list; i++) {
         const effects::Info *e = effects::info(i);
         json.begin_object()
             .string("slug", e->slug)
@@ -179,9 +266,18 @@ void write_leds(JsonWriter &json)
             .string("reactive", e->reactive == effects::Reactive::Never      ? "never"
                                 : e->reactive == effects::Reactive::Optional ? "optional"
                                                                               : "required")
+            .boolean("hidden", leds::hidden(i))
             .end_object();
     }
-    json.end_array().begin_array("palettes");
+#if CONFIG_PX_SCRIPTS
+    if (list) {
+        write_script_effects(json);
+    }
+#endif
+    if (list) {
+        json.end_array();
+    }
+    json.begin_array("palettes");
     for (size_t i = 0; i < effects::palette_count(); i++) {
         json.begin_object()
             .string("slug", effects::palette_info(i)->slug)
@@ -212,6 +308,17 @@ void write_leds(JsonWriter &json)
         .end_object();
 }
 
+void write_leds(JsonWriter &json)
+{
+    write_state(json, false);
+}
+
+void write_leds_list(JsonWriter &json)
+{
+    write_state(json, true);
+}
+
+// the answer to a change: the state without the list
 esp_err_t send_state(httpd_req_t *req)
 {
     return webserver::detail::send_state(req, write_leds);
@@ -222,7 +329,7 @@ esp_err_t get_leds(httpd_req_t *req)
     if (!require_login(req)) {
         return ESP_OK;
     }
-    return send_state(req);
+    return webserver::detail::send_state(req, write_leds_list);
 }
 
 esp_err_t post_leds(httpd_req_t *req)
@@ -261,10 +368,47 @@ esp_err_t post_leds(httpd_req_t *req)
     }
     char text[32] = {};
     size_t effect = effects::count();
+    bool has_effect = false;
     if (form_has(body, "effect")) {
-        if (!form_value(body, "effect", text, sizeof(text)) || (effect = effects::find(text)) >= effects::count()) {
+        has_effect = form_value(body, "effect", text, sizeof(text)) && (effect = effects::find(text)) < effects::count();
+#if CONFIG_PX_SCRIPTS
+        if (!has_effect && text[0] != 0 && scripts::find(text) >= 0) {
+            effect = static_cast<size_t>(scripts::find(text));
+            has_effect = true;
+        }
+#endif
+        if (!has_effect) {
             return send_error(req, "400 Bad Request", "effect: not an animation of this firmware");
         }
+    }
+#if CONFIG_PX_SCRIPTS
+    // a script's sliders: p0..p7
+    long sliders[effects::glow::kMaxParams] = {};
+    bool has_slider[effects::glow::kMaxParams] = {};
+    for (size_t k = 0; k < effects::glow::kMaxParams; k++) {
+        char key[4] = {'p', static_cast<char>('0' + k), 0, 0};
+        if (!form_number(req, body, key, 0, 255, sliders[k], has_slider[k])) {
+            return ESP_OK;
+        }
+    }
+#endif
+    // hide=<slug>, show=<slug>: out of the lists or back in, without showing it
+    size_t hide = effects::count();
+    size_t show = effects::count();
+    for (const char *key : {"hide", "show"}) {
+        if (!form_has(body, key)) {
+            continue;
+        }
+        size_t index = form_value(body, key, text, sizeof(text)) ? effects::find(text) : effects::count();
+#if CONFIG_PX_SCRIPTS
+        if (index >= effects::count() && text[0] != 0 && scripts::find(text) >= 0) {
+            index = static_cast<size_t>(scripts::find(text));
+        }
+#endif
+        if (index == effects::count()) {
+            return send_error(req, "400 Bad Request", "hide, show: not an animation of this firmware");
+        }
+        (key[0] == 'h' ? hide : show) = index;
     }
     size_t palette = effects::palette_count();
     const bool has_palette = form_has(body, "palette");
@@ -286,12 +430,31 @@ esp_err_t post_leds(httpd_req_t *req)
         on = text[0] == '1';
     }
     // all checked: now applied, in the order a person would do it
-    if (effect < effects::count()) {
+    if (hide != effects::count()) {
+        leds::set_hidden(hide, true);
+    }
+    if (show != effects::count()) {
+        leds::set_hidden(show, false);
+    }
+    if (has_effect) {
         leds::set_effect(effect);
     }
+#if CONFIG_PX_SCRIPTS
+    bool any_slider = false;
+    for (const bool has : has_slider) {
+        any_slider = any_slider || has;
+    }
+    // the sliders of the script given, else of the one shown
+    const int slot = any_slider ? leds::script_slot(has_effect ? effect : leds::status().state.effect) : -1;
+    for (size_t k = 0; k < effects::glow::kMaxParams && slot >= 0; k++) {
+        if (has_slider[k]) {
+            leds::set_script_slider(static_cast<size_t>(slot), k, static_cast<uint8_t>(sliders[k]));
+        }
+    }
+#endif
     if (has_rotation || has_reactive || has_strength || has_attack || has_release || has_palette) {
-        const size_t target = effect < effects::count() ? effect : leds::status().state.effect;
-        leds::Style style = leds::styles().style[target < leds::kMaxEffects ? target : 0];
+        const size_t target = has_effect ? effect : leds::status().state.effect;
+        leds::Style style = leds::style_of(target);
         if (has_rotation) {
             style.rotation = static_cast<uint8_t>(rotation / 90);
         }
@@ -835,6 +998,9 @@ void register_routes(void *server, void (*audio)(effects::Audio &out))
     live_route.ws_post_handshake_cb = live_post_handshake;
     httpd_register_uri_handler(static_cast<httpd_handle_t>(server), &live_route);
     register_preset_routes(server);
+#if CONFIG_PX_SCRIPTS
+    register_script_routes(server);
+#endif
 }
 
 } // namespace px::leds_api

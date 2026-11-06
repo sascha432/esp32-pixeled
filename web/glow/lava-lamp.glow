@@ -1,0 +1,24 @@
+// Lava lamp: blobs drift slowly and melt into each other where they meet.
+anim "Lava lamp"
+param blobs = 5 [2 .. 8 step 1] "Blobs"
+param size = 0.5 [0.2 .. 1] "Size"
+var bx[8], by[8]
+
+frame {
+  for k in 0 .. blobs {
+    bx[k] = wave(t / (9 + k * 2) + k / 8) * W
+    by[k] = wave(t / (11 + k * 3) + k / 5) * H
+  }
+}
+
+pixel {
+  f = 0
+  for k in 0 .. blobs {
+    f += size * 3 / (hypot(x - bx[k], y - by[k]) + 1)
+  }
+  if f > 1 {
+    pal(f / 8 + t / 30)
+  } else {
+    pal(f / 8 + t / 30, f * f * 0.6)
+  }
+}

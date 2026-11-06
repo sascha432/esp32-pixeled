@@ -28,6 +28,9 @@
 #include "px/platform/time_sync.hpp"
 #include "px/presets/presets.hpp"
 #include "px/relay/relay.hpp"
+#if CONFIG_PX_SCRIPTS
+#include "px/scripts/scripts.hpp"
+#endif
 #include "px/webserver/webserver.hpp"
 #include "backup.hpp"
 
@@ -159,6 +162,11 @@ void start_leds(const px::board::Info &board)
         .motion_hold_left = px::motion::running() ? px::motion::hold_left_s : nullptr,
         .audio = px::audio::running() ? px::audio::frame : nullptr,
         .has_audio = px::audio::running() ? px::audio::has_source : nullptr,
+#if CONFIG_PX_SCRIPTS
+        // the program of the script that comes on, from its file (scripts started after the LEDs:
+        // until then none is there, the task tries again a second later)
+        .load_script = px::scripts::load_program,
+#endif
     };
     if (px::leds::start(start) != ESP_OK) {
         ESP_LOGE(kTag, "the LEDs did not start");
@@ -205,6 +213,12 @@ extern "C" void app_main()
     if (px::presets::start() != ESP_OK) {
         ESP_LOGW(kTag, "the presets did not start");
     }
+#if CONFIG_PX_SCRIPTS
+    // after the LEDs: it tells the render task which slots there are
+    if (px::scripts::start() != ESP_OK) {
+        ESP_LOGW(kTag, "the scripts did not start");
+    }
+#endif
 
     if (px::network::start(px::platform::device_name(), nullptr, nullptr) != ESP_OK) {
         ESP_LOGE(kTag, "network did not start");

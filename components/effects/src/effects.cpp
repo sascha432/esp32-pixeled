@@ -7,6 +7,7 @@
 #include <iterator>
 
 #include "internal.hpp"
+#include "shared.hpp"
 
 namespace px::effects {
 
@@ -291,24 +292,7 @@ void breathe(Canvas &canvas, const Params &params, uint32_t ms)
     }
 }
 
-// black, red, yellow, white; with a palette its colors, dark at no heat (the palette's end is not
-// blended into its start)
-Rgb heat_color(uint8_t heat, const Params &params)
-{
-    if (params.palette != 0) {
-        return scale(palette_color(params.palette, static_cast<uint8_t>(heat * 240u / 255u), params.color),
-                     heat < 85 ? heat * 3u : 255u);
-    }
-    const auto t = static_cast<uint8_t>(heat * 191u / 255u);
-    const auto ramp = static_cast<uint8_t>((t & 63u) << 2);
-    if ((t & 0x80) != 0) {
-        return {255, 255, ramp};
-    }
-    if ((t & 0x40) != 0) {
-        return {255, ramp, 0};
-    }
-    return {ramp, 0, 0};
-}
+// heat_color (black, red, yellow, white): shared.hpp
 
 // Fire (docs/leds.md section 6.3): a heat map with a byte per pixel, the bottom row first. Each
 // step cools every cell a little, lets the heat rise (a cell takes from the two below it and their
@@ -795,6 +779,24 @@ constexpr Entry kEffects[] = {
     {{"ps-ghost-rider", "PS ghost rider", Reactive::Optional, false, true}, ps_ghost_rider},
     {{"ps-blobs", "PS blobs", Reactive::Optional, false, true}, ps_blobs},
     {{"ps-galaxy", "PS galaxy", Reactive::Optional, false, true}, ps_galaxy},
+    // the second set after WLED's (curves.cpp, fields.cpp)
+    {{"dna-spiral", "DNA spiral", Reactive::Optional, false, true}, dna_spiral},
+    {{"drift", "Drift", Reactive::Optional, false, true}, drift},
+    {{"drift-rose", "Drift rose", Reactive::Optional, false, true}, drift_rose},
+    {{"fire-2012", "Fire 2012", Reactive::Optional, false, true}, fire_2012},
+    {{"firenoise", "Firenoise", Reactive::Optional, false, true}, firenoise},
+    {{"fireworks", "Fireworks", Reactive::Optional, false, true}, fireworks},
+    {{"fireworks-1d", "Fireworks 1D", Reactive::Optional, false, true}, fireworks_1d},
+    {{"ghost-rider", "Ghost rider", Reactive::Optional, false, true}, ghost_rider},
+    {{"hiphotic", "Hiphotic", Reactive::Optional, false, true}, hiphotic},
+    {{"octopus", "Octopus", Reactive::Optional, false, true}, octopus},
+    {{"julia", "Julia", Reactive::Optional, false, true}, julia},
+    {{"lissajous", "Lissajous", Reactive::Optional, false, true}, lissajous},
+    {{"polar-lights", "Polar lights", Reactive::Optional, false, true}, polar_lights},
+    {{"scrolling-text", "Scrolling text", Reactive::Optional, true, true}, scrolling_text},
+    {{"sindots", "Sindots", Reactive::Optional, false, true}, sindots},
+    {{"soap", "Soap", Reactive::Optional, false, true}, soap},
+    {{"sun-radiation", "Sun radiation", Reactive::Optional, false, true}, sun_radiation},
     // test patterns last; the index of an animation is stored (the state, the styles): a new one
     // goes before them
     {{"edges", "Test: edges", Reactive::Never, false, false}, edges},
@@ -935,32 +937,7 @@ void render(size_t index, Canvas &canvas, const Params &params, uint32_t ms)
     const bool reactive = entry.info.reactive == Reactive::Required ||
                           (entry.info.reactive == Reactive::Optional && params.reactive && params.strength > 0);
     p.audio = reactive ? params.audio : nullptr;
-    const uint8_t rotation = params.rotation & 3;
-    const uint16_t w = canvas.width;
-    const uint16_t h = canvas.height;
-    if ((rotation == 1 || rotation == 3) && canvas.spare != nullptr) {
-        // drawn on the spare canvas, h x w, then turned onto the canvas
-        Canvas turned{h, w, canvas.spare, canvas.memory, canvas.memory_size, nullptr};
-        entry.render(turned, p, ms);
-        for (uint16_t y = 0; y < h; y++) {
-            for (uint16_t x = 0; x < w; x++) {
-                // clockwise: the turned canvas' top left lands top right; the other way bottom left
-                canvas.at(x, y) = rotation == 1 ? turned.at(y, static_cast<uint16_t>(w - 1 - x))
-                                                : turned.at(static_cast<uint16_t>(h - 1 - y), x);
-            }
-        }
-        return;
-    }
-    entry.render(canvas, p, ms);
-    if (rotation == 2) {
-        // half a turn: the pixels in reverse order
-        const size_t n = static_cast<size_t>(w) * h;
-        for (size_t i = 0; i < n / 2; i++) {
-            const Rgb swap = canvas.pixels[i];
-            canvas.pixels[i] = canvas.pixels[n - 1 - i];
-            canvas.pixels[n - 1 - i] = swap;
-        }
-    }
+    render_turned(canvas, p, [&](Canvas &c) { entry.render(c, p, ms); });
 }
 
 void blend(Rgb *into, const Rgb *from, size_t count, uint8_t amount)
@@ -1010,6 +987,35 @@ uint8_t noise8(uint32_t x, uint32_t y, uint32_t z)
     }
     return static_cast<uint8_t>(mix(slice[0], slice[1], fz));
 }
+
+namespace detail {
+
+void noise_row(uint8_t *out, size_t n, uint32_t x0, uint32_t dx, uint32_t y, uint32_t z)
+{
+    const uint32_t yi = y >> 8, zi = z >> 8;
+    const uint32_t fy = ease(y & 255), fz = ease(z & 255);
+    // the noise on the lattice's column xi: y and z interpolated
+    const auto column = [&](uint32_t xi) {
+        const uint32_t near = mix(lattice(xi, yi, zi), lattice(xi, yi + 1, zi), fy);
+        const uint32_t far = mix(lattice(xi, yi, zi + 1), lattice(xi, yi + 1, zi + 1), fy);
+        return mix(near, far, fz);
+    };
+    uint32_t cell = x0 >> 8;
+    uint32_t left = column(cell);
+    uint32_t right = column(cell + 1);
+    uint32_t x = x0;
+    for (size_t i = 0; i < n; i++, x += dx) {
+        const uint32_t xi = x >> 8;
+        if (xi != cell) {
+            left = xi == cell + 1 ? right : column(xi);
+            right = column(xi + 1);
+            cell = xi;
+        }
+        out[i] = static_cast<uint8_t>(mix(left, right, ease(x & 255)));
+    }
+}
+
+} // namespace detail
 
 Rgb hsv(uint8_t hue, uint8_t saturation, uint8_t value)
 {

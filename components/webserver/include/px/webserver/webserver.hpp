@@ -35,8 +35,10 @@ struct BackupReport {
 // app has none and passes nullptr; it gets the device back on the network, the import follows in
 // the main firmware).
 struct BackupAccess {
-    // the file with the settings, the presets or both
-    memory::String (*export_file)(bool settings, bool presets);
+    // the file with the settings, the presets or both, handed to `chunk` a piece at a time (it is
+    // never in RAM at once: the scripts' sources make it large)
+    void (*export_file)(bool settings, bool presets, void (*chunk)(std::string_view piece, void *context),
+                        void *context);
     // checks `text` and, unless `check_only`, imports it when the check found no problem
     BackupReport (*import_file)(std::string_view text, bool check_only);
 };

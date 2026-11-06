@@ -1,0 +1,65 @@
+// Fireworks 1D as a script, like the built-in "Fireworks 1D": a rocket shot up from the bottom at a
+// random place, slowing as it climbs, bursts at the top of its way into sparks flying out every way
+// and falling, white hot at first, then in the burst's color, dimming out. The sparks are arrays,
+// drawn on the trail in the frame block. With sound: more sparks the louder, a beat fires at once.
+anim "Fireworks 1D (Glow)"
+param gravity = 1 [0.3 .. 3] "Gravity"
+param sparks = 32 [8 .. 48 step 1] "Sparks"
+var px[48], py[48], vx[48], vy[48], life[48], tint[48]
+var rx, ry, rvy, flying, wait, rhue
+
+frame {
+  fade(min(1, dt * 12))
+  blur(min(1, dt * 6))
+  // pixels a second squared: a tall canvas climbed in about 0.6 s
+  g = H * 4 * gravity
+  if not flying {
+    wait -= dt
+    if wait <= 0 or beat {
+      flying = 1
+      rx = rand() * (W - 1)
+      ry = H - 1
+      // it bursts 55 to 90 % of the height up
+      top = H * (0.1 + rand() * 0.35)
+      rvy = -sqrt(g * (ry - top) * 2)
+      rhue = rand()
+    }
+  }
+  if flying {
+    rvy += g * dt
+    ry += rvy * dt
+    hsv(0.08, 0.55, 1)
+    dot(rx, ry)
+    if rvy >= 0 {
+      flying = 0
+      wait = 0.3 + rand() * 1.1
+      many = sparks * (1 + level)
+      for k in 0 .. 48 {
+        if life[k] <= 0 and many > 0 {
+          a = rand()
+          fast = H * (0.25 + rand() * 0.45) * 1.5
+          px[k] = rx
+          py[k] = ry
+          vx[k] = cos(a) * fast
+          vy[k] = sin(a) * fast
+          life[k] = 0.8 + rand() * 0.6
+          tint[k] = rhue + rand() * 0.1
+          many -= 1
+        }
+      }
+    }
+  }
+  for k in 0 .. 48 {
+    if life[k] > 0 {
+      vx[k] -= vx[k] * 3 * dt
+      vy[k] += (g / 2 - vy[k] * 3) * dt
+      px[k] += vx[k] * dt
+      py[k] += vy[k] * dt
+      life[k] -= dt
+      // white hot for its first eighth of a second (it starts at 0.8 to 1.4 s of life)
+      white = clamp((life[k] - 0.7) * 8, 0, 1)
+      hsv(tint[k], 1 - white, min(1, life[k] * 1.5))
+      dot(px[k], py[k])
+    }
+  }
+}

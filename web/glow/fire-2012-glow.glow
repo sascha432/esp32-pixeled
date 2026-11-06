@@ -1,0 +1,44 @@
+// Fire 2012 as a script, like the built-in "Fire 2012": a fire in every column on its own. Each step
+// the heat drifts up (a cell takes from the cell below it once and from the one below that twice),
+// every cell cools a little, and sparks light in the lowest cells. With sound each column sparks
+// with its band (bass left), a beat sparks every column.
+anim "Fire 2012 (Glow)"
+param cooling = 80 [20 .. 200 step 1] "Cooling"
+param sparking = 120 [0 .. 255 step 1] "Sparking"
+grid flame
+var clock, tick
+
+frame {
+  // 60 steps a second at the light's speed, at most one a frame
+  clock = min(clock + dt * 60, 2)
+  tick = clock >= 1
+  if tick {
+    clock -= 1
+    // in the lowest 7 cells (fewer in a short column), 160 to 255 of heat
+    zone = min(7, floor(H / 4) + 1)
+    for c in 0 .. W {
+      chance = sparking / 255
+      if level > 0 {
+        chance = beat ? 1 : band(floor(c * 32 / W)) * 0.75
+      }
+      if rand() < chance {
+        k = H - 1 - rand(zone)
+        flame[c, k] = min(1, flame[c, k] + (160 + rand(96)) / 255)
+      }
+    }
+  }
+}
+
+pixel {
+  h = flame[x, y]
+  if tick {
+    // the rows below as they were before this step: the heat rises a row at a time
+    if y < H - 2 {
+      h = (flame[x, y + 1] + flame[x, y + 2] * 2) / 3
+    }
+    // cooling by up to cooling * 10 / H + 2 of 255
+    h = max(0, h - rand() * (cooling * 10 / H + 2) / 255)
+    flame[x, y] = h
+  }
+  heat(h)
+}

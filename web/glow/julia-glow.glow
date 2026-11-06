@@ -1,0 +1,37 @@
+// Julia as a script, like the built-in "Julia": the Julia set of a point going along the edge of the
+// Mandelbrot set's heart (once around in a minute), so the fractal grows arms, curls, splits and
+// joins again. Each pixel is colored by the steps it takes to leave, dark inside the set. A loop per
+// pixel: its end is the same for every pixel (a param), the steps of a pixel that left are masked.
+anim "Julia (Glow)"
+param steps = 20 [8 .. 32 step 1] "Steps"
+param width = 3 [1.5 .. 6] "Width"
+var cr, ci
+
+frame {
+  // the heart's edge, e^ia / 2 - e^2ia / 4, a little inside; from a third of the way (the rabbits)
+  a = t / 60 + 1 / 3
+  cr = 0.98 * (cos(a) / 2 - cos(a * 2) / 4)
+  ci = 0.98 * (sin(a) / 2 - sin(a * 2) / 4)
+}
+
+pixel {
+  s = width / min(W, H)
+  zx = (x - (W - 1) / 2) * s
+  zy = (y - (H - 1) / 2) * s
+  n = 0
+  for k in 0 .. steps {
+    xx = zx * zx
+    yy = zy * zy
+    // a chunk of pixels that all left skips the rest of its steps' work
+    if xx + yy < 4 {
+      zy = zx * zy * 2 + ci
+      zx = xx - yy + cr
+      n += 1
+    }
+  }
+  if n >= steps {
+    rgb(0, 0, 0)
+  } else {
+    pal(n / 12 + t / 16, min(1, n / 4))
+  }
+}

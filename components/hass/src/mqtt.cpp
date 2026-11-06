@@ -23,6 +23,9 @@
 #include "px/platform/restart.hpp"
 #include "px/platform/settings.hpp"
 #include "px/presets/presets.hpp"
+#if CONFIG_PX_SCRIPTS
+#include "px/scripts/scripts.hpp"
+#endif
 
 namespace px::hass {
 
@@ -74,6 +77,13 @@ struct Sent {
     bool presets_valid = false;
     uint32_t presets_revision = 0;
     size_t preset = 0;
+    // the effect list (the scripts, the animations left out): announced again once its changes
+    // stopped for 2 s. Every announce queues some 30 retained messages until the broker has them:
+    // a backup's scripts or a list of checkboxes clicked through would queue tens of KB.
+    bool lists_valid = false;
+    uint32_t lists = 0;
+    uint32_t lists_seen = 0;
+    int64_t lists_seen_us = 0;
 };
 Sent g_sent;
 bool g_motion = false;
@@ -284,11 +294,27 @@ void announce_all()
             .boolean("effect", true)
             .begin_array("effect_list");
         for (size_t i = 0; i < effects::count(); i++) {
-            // an animation that needs sound only with a source
-            if (audio || effects::info(i)->reactive != effects::Reactive::Required) {
+            // an animation that needs sound only with a source; none the user left out
+            if ((audio || effects::info(i)->reactive != effects::Reactive::Required) && !leds::hidden(i)) {
                 json.string(nullptr, effects::info(i)->name);
             }
         }
+#if CONFIG_PX_SCRIPTS
+        // the saved scripts that run (not the editor's run): their names from the index
+        struct Context {
+            formats::JsonWriter *json;
+            bool audio;
+        } c{&json, audio};
+        scripts::each(
+            [](size_t slot, const scripts::Script &s, void *context) {
+                const auto &c = *static_cast<const Context *>(context);
+                if (slot < leds::kScriptSlots && s.program_size != 0 && !leds::hidden(leds::script_effect(slot)) &&
+                    (c.audio || s.reactive != effects::Reactive::Required)) {
+                    c.json->string(nullptr, s.name);
+                }
+            },
+            &c);
+#endif
         json.end_array().end_object();
         announce("light", "light", json);
     }
@@ -464,6 +490,14 @@ void publish_light(const leds::State &s, bool speed_changed)
     char buffer[384];
     formats::JsonWriter json(buffer, sizeof(buffer));
     const effects::Info *effect = effects::info(s.effect);
+    const char *effect_name = effect != nullptr ? effect->name : "";
+#if CONFIG_PX_SCRIPTS
+    char script_slug[scripts::kSlugSize] = {};
+    char script_name[effects::glow::kNameSize] = {};
+    if (effect == nullptr && scripts::names(s.effect, script_slug, script_name)) {
+        effect_name = script_name;
+    }
+#endif
     json.begin_object()
         .string("state", s.on ? "ON" : "OFF")
         .number("brightness", s.brightness)
@@ -473,7 +507,7 @@ void publish_light(const leds::State &s, bool speed_changed)
         .number("g", s.color.g)
         .number("b", s.color.b)
         .end_object()
-        .string("effect", effect != nullptr ? effect->name : "")
+        .string("effect", effect_name)
         .end_object();
     char state[kTopicSize * 2];
     topic(state, "light/state");
@@ -604,6 +638,24 @@ void on_timer(void *)
         static EXT_RAM_BSS_ATTR char buffer[1536]; // the timer's task only; PSRAM on the S3
         announce_presets(buffer, sizeof(buffer));
     }
+    // a script saved, deleted or renamed, an animation left out or back in: the effect list again
+    uint32_t lists = leds::hidden_revision();
+#if CONFIG_PX_SCRIPTS
+    lists = lists * 2654435761u + scripts::revision();
+#endif
+    if (!g_sent.lists_valid) {
+        g_sent.lists = lists;
+        g_sent.lists_seen = lists;
+        g_sent.lists_valid = true;
+    } else if (lists != g_sent.lists_seen) {
+        g_sent.lists_seen = lists;
+        g_sent.lists_seen_us = esp_timer_get_time();
+    } else if (lists != g_sent.lists && esp_timer_get_time() - g_sent.lists_seen_us >= 2000000) {
+        announce_all();
+        g_sent.style_valid = false;
+        g_sent.valid = false;
+        g_sent.lists = lists;
+    }
     const size_t preset = presets::current();
     if (!g_sent.presets_valid || g_sent.presets_revision != revision || g_sent.preset != preset) {
         presets::Preset p{};
@@ -659,6 +711,11 @@ void light_command(const char *data, size_t length)
                 leds::set_effect(i);
             }
         }
+#if CONFIG_PX_SCRIPTS
+        if (const int script = scripts::find(effect->valuestring); script >= 0) {
+            leds::set_effect(static_cast<size_t>(script));
+        }
+#endif
     }
     if (const cJSON *color = cJSON_GetObjectItem(root, "color"); cJSON_IsObject(color)) {
         const cJSON *r = cJSON_GetObjectItem(color, "r");
@@ -730,7 +787,7 @@ void handle_data(const esp_mqtt_event_t &event)
         std::snprintf(text, sizeof(text), "%.*s", event.data_len, event.data);
         const int degrees = std::atoi(text);
         const size_t effect = leds::status().state.effect;
-        leds::Style style = leds::styles().style[effect < leds::kMaxEffects ? effect : 0];
+        leds::Style style = leds::style_of(effect);
         if (degrees % 90 == 0 && degrees >= 0 && degrees < 360) {
             style.rotation = static_cast<uint8_t>(degrees / 90);
             leds::set_style(effect, style);
@@ -740,7 +797,7 @@ void handle_data(const esp_mqtt_event_t &event)
     topic(expected, "reactive/set");
     if (std::strcmp(name, expected) == 0) {
         const size_t effect = leds::status().state.effect;
-        leds::Style style = leds::styles().style[effect < leds::kMaxEffects ? effect : 0];
+        leds::Style style = leds::style_of(effect);
         style.reactive = event.data_len == 2 && std::strncmp(event.data, "ON", 2) == 0;
         leds::set_style(effect, style);
         return;
@@ -751,7 +808,7 @@ void handle_data(const esp_mqtt_event_t &event)
         std::snprintf(text, sizeof(text), "%.*s", event.data_len, event.data);
         const int value = std::atoi(text);
         const size_t effect = leds::status().state.effect;
-        leds::Style style = leds::styles().style[effect < leds::kMaxEffects ? effect : 0];
+        leds::Style style = leds::style_of(effect);
         style.strength = static_cast<uint8_t>(value < 0 ? 0 : value > 255 ? 255 : value);
         leds::set_style(effect, style);
         return;
@@ -764,7 +821,7 @@ void handle_data(const esp_mqtt_event_t &event)
         std::snprintf(text, sizeof(text), "%.*s", event.data_len, event.data);
         const int value = std::atoi(text);
         const size_t effect = leds::status().state.effect;
-        leds::Style style = leds::styles().style[effect < leds::kMaxEffects ? effect : 0];
+        leds::Style style = leds::style_of(effect);
         // the largest values are clamped by set_style
         const auto ms = static_cast<uint16_t>(value < 0 ? 0 : value > 65535 ? 65535 : value);
         if (attack) {
@@ -780,7 +837,7 @@ void handle_data(const esp_mqtt_event_t &event)
         char text[40];
         std::snprintf(text, sizeof(text), "%.*s", event.data_len, event.data);
         const size_t effect = leds::status().state.effect;
-        leds::Style style = leds::styles().style[effect < leds::kMaxEffects ? effect : 0];
+        leds::Style style = leds::style_of(effect);
         for (size_t i = 0; i < effects::palette_count(); i++) {
             if (std::strcmp(effects::palette_info(i)->name, text) == 0 ||
                 std::strcmp(effects::palette_info(i)->slug, text) == 0) {

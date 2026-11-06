@@ -556,6 +556,26 @@ TEST(effects_noise_is_smooth_and_spread)
     CHECK(largest_step < 80); // neighbors an eighth of a cell apart
 }
 
+TEST(effects_noise_row_follows_noise8)
+{
+    // the same noise, interpolated in another order: within a few steps of noise8
+    uint8_t row[64];
+    int worst = 0;
+    for (const uint32_t y : {0u, 77u, 300u, 1000u}) {
+        for (const uint32_t z : {0u, 130u, 5000u}) {
+            for (const uint32_t dx : {20u, 64u, 96u, 256u}) {
+                const uint32_t x0 = 0x4000u + 13u;
+                detail::noise_row(row, 64, x0, dx, y, z);
+                for (uint32_t i = 0; i < 64; i++) {
+                    const int d = static_cast<int>(row[i]) - static_cast<int>(noise8(x0 + i * dx, y, z));
+                    worst = d < 0 ? (-d > worst ? -d : worst) : (d > worst ? d : worst);
+                }
+            }
+        }
+    }
+    CHECK(worst <= 3);
+}
+
 TEST(effects_palettes_list_and_find)
 {
     REQUIRE(palette_count() >= 10);
@@ -617,10 +637,14 @@ TEST(effects_palette_changes_the_colors)
 
 namespace {
 
-// the animations after WLED's 2D ones (particles.cpp, distortion waves); the two GEQs need sound
-constexpr const char *kWledAnimations[] = {"colored-bursts", "blobs",          "distortion-waves", "waverly",
-                                           "ps-vortex",      "ps-fuzzy-noise", "ps-waterfall",     "ps-ghost-rider",
-                                           "ps-blobs",       "ps-galaxy"};
+// the animations after WLED's 2D ones (particles.cpp, distortion waves; the second set in
+// curves.cpp and fields.cpp); the two GEQs need sound
+constexpr const char *kWledAnimations[] = {
+    "colored-bursts", "blobs",       "distortion-waves", "waverly",      "ps-vortex",      "ps-fuzzy-noise",
+    "ps-waterfall",   "ps-ghost-rider", "ps-blobs",      "ps-galaxy",    "dna-spiral",     "drift",
+    "drift-rose",     "fire-2012",   "firenoise",        "fireworks",    "fireworks-1d",   "ghost-rider",
+    "hiphotic",       "octopus",     "julia",            "lissajous",    "polar-lights",   "scrolling-text",
+    "sindots",        "soap",        "sun-radiation"};
 constexpr const char *kGeqAnimations[] = {"ps-geq-2d", "ps-geq-nova"};
 
 // music: loud, every band, a beat every half second
@@ -802,6 +826,71 @@ TEST(effects_geq_2d_shoots_from_the_columns_of_its_bands)
         }
     }
     CHECK(top > 0);
+}
+
+TEST(effects_scrolling_text_runs_through_the_middle_rows)
+{
+    // 7 rows in the middle of 16: 4 to 10; the rest stays dark
+    Owned o(32, 16);
+    Params params;
+    params.text = "HELLO";
+    params.color = {0, 200, 60};
+    std::vector<uint32_t> middle;
+    uint32_t outside = 0;
+    for (uint32_t ms = 0; ms <= 3000; ms += 20) {
+        render(find("scrolling-text"), o.canvas, params, ms);
+        uint32_t sum = 0;
+        uint32_t weighted = 0;
+        for (uint16_t y = 0; y < 16; y++) {
+            for (uint16_t x = 0; x < 32; x++) {
+                const Rgb c = o.canvas.at(x, y);
+                const uint32_t light = c.r + c.g + c.b;
+                if (y < 4 || y > 10) {
+                    outside += light;
+                }
+                sum += light;
+                weighted += light * x;
+            }
+        }
+        if (ms % 500 == 0 && sum > 0) {
+            middle.push_back(weighted / sum);
+        }
+    }
+    CHECK(outside == 0);
+    REQUIRE(middle.size() >= 3);
+    // it runs to the left: the light's middle moves left while the text crosses
+    CHECK(middle[1] < middle[0] || middle[2] < middle[1]);
+    // another text, another picture; none: its own
+    Owned other(32, 16);
+    params.text = "WWWWWW";
+    for (uint32_t ms = 0; ms <= 3000; ms += 20) {
+        render(find("scrolling-text"), other.canvas, params, ms);
+    }
+    CHECK(any_differs(o.pixels, other.pixels));
+    params.text = nullptr;
+    Owned own(32, 16);
+    for (uint32_t ms = 0; ms <= 1000; ms += 20) {
+        render(find("scrolling-text"), own.canvas, params, ms);
+    }
+    CHECK(brightness_sum(own.canvas) > 0);
+}
+
+TEST(effects_fire_2012_burns_from_the_bottom_in_columns)
+{
+    Owned o(8, 16);
+    Params params;
+    for (uint32_t ms = 0; ms <= 2000; ms += 20) {
+        render(find("fire-2012"), o.canvas, params, ms);
+    }
+    uint32_t bottom = 0, top = 0;
+    for (uint16_t x = 0; x < 8; x++) {
+        for (uint16_t y = 0; y < 3; y++) {
+            bottom += o.canvas.at(x, static_cast<uint16_t>(15 - y)).r;
+            top += o.canvas.at(x, y).r;
+        }
+    }
+    CHECK(bottom > 0);
+    CHECK(bottom > top * 3);
 }
 
 TEST(effects_sin16_has_the_shape_of_a_sine)

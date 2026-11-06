@@ -5,6 +5,9 @@
 
 window.pxLeds = (() => {
   const watts = (mw) => `${(mw / 1000).toFixed(1)} W`;
+  // The list of the animations comes with GET /api/leds only (the device reads its scripts from
+  // flash for it); the answers to a change and the live pushes have the rest: the list is kept.
+  const keep = (old, fresh) => (fresh.effects ? fresh : { ...fresh, effects: old.effects });
 
   // ---------------------------------------------------------------------------- the Control page
 
@@ -24,8 +27,9 @@ window.pxLeds = (() => {
       ...(s.motion.sensor ? motionFacts(s) : []),
     ]);
     const effectOf = (slug) => s.effects.find((e) => e.slug === slug) || {};
-    // an animation that needs sound only with a source (the current one stays listed)
-    const listed = (e) => e.reactive !== "required" || s.audio.source || e.slug === s.effect;
+    // an animation that needs sound only with a source, none the user left out (LED settings); the
+    // current one stays listed
+    const listed = (e) => e.slug === s.effect || (!e.hidden && (e.reactive !== "required" || s.audio.source));
     preview();
 
     $("#leds-control").innerHTML = card("Light", `
@@ -85,7 +89,7 @@ window.pxLeds = (() => {
     showColor();
     // the current animation's rotation and sound switch; the switch only for one that can react,
     // with an audio source
-    const showStyle = () => {
+    let showStyle = () => {
       $("#leds-rotation").value = String(s.rotation);
       $("#leds-palette").value = s.palette;
       showColor();
@@ -107,7 +111,7 @@ window.pxLeds = (() => {
     // the presets card follows the light (the preset it matches); drawn further down
     let presets = { update: async () => {} };
     const send = (form) => api("/api/leds", form).then((answer) => {
-      s = answer;
+      s = keep(s, answer);
       showStyle();
       $("#leds-status").innerHTML = statusFacts();
       presets.update();
@@ -129,13 +133,13 @@ window.pxLeds = (() => {
     slider("#leds-release", "release");
     $("#leds-on").onchange = (e) => send({ on: e.target.checked ? "1" : "0" });
     $("#leds-effect").onchange = (e) => { showColor(); send({ effect: e.target.value }); };
-    overlayCard(s, (answer) => { s = answer; });
+    overlayCard(s, (answer) => { s = keep(s, answer); });
     $("#leds-color").oninput = (e) => send({ color: e.target.value });
     $("#leds-rotation").onchange = (e) => send({ rotation: e.target.value });
     $("#leds-palette").onchange = (e) => send({ palette: e.target.value });
     // a preset sets the whole light: the card's controls follow
     presets = await presetCard((answer) => {
-      s = answer;
+      s = keep(s, answer);
       $("#leds-on").checked = s.on;
       for (const key of ["brightness", "speed"]) {
         $(`#leds-${key}`).value = String(s[key]);
@@ -146,12 +150,47 @@ window.pxLeds = (() => {
       showStyle();
     });
     $("#leds-reactive").onchange = (e) => send({ reactive: e.target.checked ? "1" : "0" });
+// #if CONFIG_PX_SCRIPTS
+    // a script's sliders (its params) under the speed; drawn again for another animation
+    $("#leds-speed").insertAdjacentHTML("afterend", '<div id="leds-params"></div>');
+    const showParams = () => {
+      const box = $("#leds-params");
+      if (!box) return;
+      // the shown one's, with their sliders
+      const params = (s.shown && s.shown.script && s.shown.params) || [];
+      if (box.dataset.effect !== s.effect) {
+        box.dataset.effect = s.effect;
+        box.innerHTML = params.map((p, k) => `
+          <label class="form-label" for="leds-p${k}">${esc(p.label)} <span id="leds-p${k}-value" class="text-body-secondary"></span></label>
+          <input id="leds-p${k}" type="range" class="form-range mb-3" min="0" max="255">`).join("");
+        params.forEach((p, k) => {
+          const input = $(`#leds-p${k}`);
+          let timer = null;
+          input.oninput = () => {
+            if (!timer) timer = setTimeout(() => { timer = null; send({ [`p${k}`]: input.value }); }, 150);
+          };
+          input.onchange = () => send({ [`p${k}`]: input.value });
+        });
+      }
+      params.forEach((p, k) => {
+        const input = $(`#leds-p${k}`);
+        if (input && document.activeElement !== input) input.value = String(p.slider);
+        $(`#leds-p${k}-value`).textContent = +p.value.toFixed(3);
+      });
+    };
+    showParams();
+    const showStyleOnly = showStyle;
+    showStyle = () => {
+      showStyleOnly();
+      showParams();
+    };
+// #endif
 
     // The LED status (with the motion's) and the preset the light matches follow on the live socket
     // (checked every 2 s, sent when they changed). The controls are not drawn over: they show what
     // this page sent.
     page.live("/api/leds", (state) => {
-      s = state;
+      s = keep(s, state);
       const box = $("#leds-status");
       if (box) box.innerHTML = statusFacts();
     });
@@ -188,10 +227,10 @@ window.pxLeds = (() => {
   // LED settings: power and timing, and with a sensor the motion's auto off; set once (the form
   // with Save, the motion's fields on change). The motion's state is on Control.
   async function ledSettings() {
-    render(`<h1>LED settings</h1><div id="leds-config">Loading ...</div><div id="leds-motion"></div>`);
+    render(`<h1>LED settings</h1><div id="leds-config">Loading ...</div><div id="leds-lists"></div><div id="leds-motion"></div>`);
     let s = await api("/api/leds");
     const send = (form) => api("/api/leds", form).then((answer) => {
-      s = answer;
+      s = keep(s, answer);
       toast("saved", "success");
     }).catch((e) => toast(e.message, "danger"));
 
@@ -210,6 +249,18 @@ window.pxLeds = (() => {
       $("#motion-auto").onchange = (e) => send({ auto_off: e.target.checked ? "1" : "0" });
       $("#motion-minutes").onchange = (e) => send({ auto_off_minutes: e.target.value });
     }
+    // the animations in the lists (Control, Home Assistant's effects, the buttons): a box each
+    $("#leds-lists").innerHTML = card("Animations in the lists", `
+      <p class="form-text mt-0">The ones not ticked are left out of Control's list, Home Assistant's effects and the
+        buttons' steps; the one shown stays where it is.</p>
+      <div class="row g-1">${s.effects.map((e) => `
+        <div class="col-sm-6 col-lg-4"><div class="form-check">
+          <input class="form-check-input" type="checkbox" id="list-${esc(e.slug)}" data-slug="${esc(e.slug)}" ${e.hidden ? "" : "checked"}>
+          <label class="form-check-label" for="list-${esc(e.slug)}">${esc(e.name)}</label>
+        </div></div>`).join("")}</div>`);
+    document.querySelectorAll("#leds-lists [data-slug]").forEach((box) => {
+      box.onchange = () => send({ [box.checked ? "show" : "hide"]: box.dataset.slug });
+    });
     const c = s.config;
     $("#leds-config").innerHTML = card("Power and timing", `
       <form id="leds-config-form">
@@ -250,13 +301,13 @@ window.pxLeds = (() => {
     $("#leds-config-form").onsubmit = (e) => {
       e.preventDefault();
       busy(e.submitter || $("#leds-config-form button"), async () => {
-        s = await api("/api/leds/config", {
+        s = keep(s, await api("/api/leds/config", {
           power_limit_mw: Math.round(Number($("#cfg-limit").value) * 1000), fps: $("#cfg-fps").value,
           fade_ms: $("#cfg-fade").value, settle_ms: $("#cfg-settle").value,
           crossfade_ms: $("#cfg-crossfade").value, power_on: $("#cfg-power-on").value,
           channel_mw: $("#cfg-channel").value, idle_mw: $("#cfg-idle").value, driver: $("#cfg-driver").value,
           dither: $("#cfg-dither").checked ? "1" : "0",
-        });
+        }));
         toast("saved", "success");
       });
     };
@@ -576,9 +627,9 @@ window.pxLeds = (() => {
     }, 3000);
   }
 
-  // The card "Live": the canvas as drawn, a cell per LED.
-  function preview() {
-    $("#leds-live").innerHTML = card("Live", `
+  // The card "Live" in `box`: the canvas as drawn, a cell per LED.
+  function preview(box = "#leds-live") {
+    $(box).innerHTML = card("Live", `
       <div><canvas id="live-canvas" class="border rounded" style="max-width:100%;image-rendering:pixelated"></canvas></div>
       <div id="live-state" class="small text-body-secondary mt-1">connecting ...</div>`);
     // this page's: a new visit of the page has its own
@@ -803,5 +854,5 @@ window.pxLeds = (() => {
     });
   }
 
-  return { leds, sound, ledSettings, buttons, layout };
+  return { leds, sound, ledSettings, buttons, layout, preview };
 })();

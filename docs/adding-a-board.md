@@ -58,7 +58,10 @@ case, digits and `_`; private, not in git, except the public WLED controller PCB
 * `px_board_variant.hpp`: a copy of `components/board/src/variant/px_board_variant.hpp` whose
   `apply()` changes the fields of `Info` that differ (other LED pins, a relay, a motion sensor);
   set `info.variant` to the variant's name, it is logged at boot.
-* `sdkconfig.defaults` (optional): Kconfig options of this unit only, the last layer.
+* `sdkconfig.defaults` (optional): Kconfig options of this unit only, the last layer. A unit
+  without the scripts (no code, no RAM of them, [glow.md](glow.md)) gets
+  `# CONFIG_PX_SCRIPTS is not set`, one with fewer of them `CONFIG_PX_SCRIPT_SLOTS=4` (1 to 16,
+  16 by default; a script takes RAM only while it is shown).
 
 `python tools/build.py <board>.<variant>` builds it in `build/<board>.<variant>/<app>`. The image
 tag stays the board's: a variant takes the board's updates and the other way round, so update

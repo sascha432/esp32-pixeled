@@ -41,6 +41,10 @@
 #include "px/output/output.hpp"
 #include "px/presets/presets.hpp"
 #include "px/relay/relay.hpp"
+#if CONFIG_PX_SCRIPTS
+#include "px/memory/large.hpp"
+#include "px/scripts/scripts.hpp"
+#endif
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "freertos/freertos_debug.h"
@@ -767,10 +771,18 @@ void print_leds_status()
 {
     const px::leds::Status s = px::leds::status();
     const px::effects::Info *effect = px::effects::info(s.state.effect);
+    const char *effect_slug = effect != nullptr ? effect->slug : "?";
+#if CONFIG_PX_SCRIPTS
+    char script_slug[px::scripts::kSlugSize] = {};
+    char script_name[px::effects::glow::kNameSize] = {};
+    if (effect == nullptr && px::scripts::names(s.state.effect, script_slug, script_name)) {
+        effect_slug = script_slug;
+    }
+#endif
     const px::effects::PaletteInfo *palette = px::effects::palette_info(s.style.palette);
     std::printf("%s, brightness %u (now %u), %s, color %u,%u,%u, speed %u, palette %s, rotation %u%s (strength %u, "
                 "attack %u ms, release %u ms)%s\n",
-                s.state.on ? "on" : "off", s.state.brightness, s.level, effect != nullptr ? effect->slug : "?",
+                s.state.on ? "on" : "off", s.state.brightness, s.level, effect_slug,
                 s.state.color.r, s.state.color.g, s.state.color.b, s.state.speed,
                 palette != nullptr ? palette->slug : "?", s.style.rotation * 90u,
                 s.style.reactive ? ", reacts to sound" : "", s.style.strength, s.style.attack_ms, s.style.release_ms,
@@ -927,7 +939,19 @@ int cmd_render(int argc, char **argv)
         return 0;
     }
     if (std::strcmp(sub, "effect") == 0) {
-        const size_t index = argc == 3 ? px::effects::find(argv[2]) : px::effects::count();
+        // as the buttons step: the ones left out of the lists (and those that need sound without
+        // one) are skipped
+        if (argc == 3 && (std::strcmp(argv[2], "next") == 0 || std::strcmp(argv[2], "prev") == 0)) {
+            leds::step_effect(argv[2][0] == 'n' ? 1 : -1);
+            return 0;
+        }
+        size_t index = argc == 3 ? px::effects::find(argv[2]) : px::effects::count();
+#if CONFIG_PX_SCRIPTS
+        if (argc == 3 && index >= px::effects::count() && px::scripts::find(argv[2]) >= 0) {
+            leds::set_effect(static_cast<size_t>(px::scripts::find(argv[2])));
+            return 0;
+        }
+#endif
         if (index >= px::effects::count()) {
             std::printf("effects:");
             for (size_t i = 0; i < px::effects::count(); i++) {
@@ -950,7 +974,7 @@ int cmd_render(int argc, char **argv)
             return argc == 3 ? 1 : 0;
         }
         const size_t effect = leds::status().state.effect;
-        leds::Style style = leds::styles().style[effect < leds::kMaxEffects ? effect : 0];
+        leds::Style style = leds::style_of(effect);
         style.palette = static_cast<uint8_t>(index);
         leds::set_style(effect, style);
         return 0;
@@ -988,7 +1012,7 @@ int cmd_render(int argc, char **argv)
     if (std::strcmp(sub, "rotate") == 0 || std::strcmp(sub, "reactive") == 0 || std::strcmp(sub, "strength") == 0 ||
         std::strcmp(sub, "attack") == 0 || std::strcmp(sub, "release") == 0) {
         const size_t effect = leds::status().state.effect;
-        leds::Style style = leds::styles().style[effect < leds::kMaxEffects ? effect : 0];
+        leds::Style style = leds::style_of(effect);
         if (sub[0] == 'a' || sub[2] == 'l') {
             const bool attack = sub[0] == 'a';
             const int ms = argc == 3 ? std::atoi(argv[2]) : -1;
@@ -1196,7 +1220,7 @@ int cmd_leds(int argc, char **argv)
     if (output_command) {
         px::leds::suspend(true);
     } else if (std::strcmp(sub, "lanes") != 0) {
-        return usage("leds [status] | on | off | bright <0-255> | effect [<name>] | color <r> <g> <b> | speed <0-255> |"
+        return usage("leds [status] | on | off | bright <0-255> | effect [<name>|next|prev] | color <r> <g> <b> | speed <0-255> |"
                      " palette [<name>] | preset [<name>|next|save <name>|delete <name>] |"
                      " rotate 0|90|180|270 | reactive on|off | strength <0-255> | attack <ms> | release <ms> | autooff on|off|<min> |"
                      " fps <n> | crossfade <ms> | poweron restore|off|on | overlay ... | dither on|off | driver rmt|parallel | limit <mW> |"
@@ -1291,7 +1315,7 @@ int cmd_leds(int argc, char **argv)
         fill[3] = range;
         return cmd_leds(7, const_cast<char **>(fill));
     }
-    return usage("leds [status] | on | off | bright <0-255> | effect [<name>] | color <r> <g> <b> | speed <0-255> |"
+    return usage("leds [status] | on | off | bright <0-255> | effect [<name>|next|prev] | color <r> <g> <b> | speed <0-255> |"
                  " limit <mW> | canvas <w> <h> | panel <lane> <x> <y> <w> <h> tl|tr|bl|br rows|columns [zigzag|straight] |"
                  " layout   -- output tests (suspend the LEDs until `leds resume`): setup <count lane 1> ... | fill <r> <g> <b> |"
                  " px <lane> <from>[-<to>] <r> <g> <b> | <count> <r> <g> <b> [lane] | bench [frames|encode] | lanes | stop");
@@ -1458,6 +1482,64 @@ int cmd_factory_reset(int argc, char **argv)
     return 0;
 }
 
+#if CONFIG_PX_SCRIPTS
+// The scripts (docs/glow.md): the list with their state, a source, the program it compiles to
+int cmd_script(int argc, char **argv)
+{
+    namespace scripts = px::scripts;
+    const char *sub = argc > 1 ? argv[1] : "list";
+    if (std::strcmp(sub, "list") == 0 && argc <= 2) {
+        size_t count = 0;
+        scripts::each(
+            [](size_t slot, const scripts::Script &s, void *context) {
+                *static_cast<size_t *>(context) += slot < px::leds::kRunSlot ? 1 : 0;
+                std::printf("%-3s %-23s \"%s\": %s, source %lu bytes, program %lu bytes, %u params\n",
+                            slot == px::leds::kRunSlot ? "run" : std::to_string(slot).c_str(), s.slug, s.name,
+                            s.ok ? "ok" : (s.program_size != 0 ? "error (the one before runs)" : "error"),
+                            static_cast<unsigned long>(s.source_size), static_cast<unsigned long>(s.program_size),
+                            s.param_count);
+                if (!s.ok) {
+                    std::printf("    line %u, column %u: %s\n", s.error.line, s.error.column, s.error.text);
+                }
+            },
+            &count);
+        const px::leds::Status status = px::leds::status();
+        std::printf("%u of %u places; the compiler took %lu bytes of stack at most\n", static_cast<unsigned>(count),
+                    static_cast<unsigned>(px::leds::kScriptSlots),
+                    static_cast<unsigned long>(scripts::compiler_stack_peak()));
+        if (status.script_error[0] != 0) {
+            std::printf("the script shown: %s\n", status.script_error);
+        }
+        return 0;
+    }
+    if (std::strcmp(sub, "show") == 0 && argc == 3) {
+        auto *text = static_cast<char *>(px::memory::allocate_large(px::effects::glow::kMaxSource + 1));
+        size_t length = 0;
+        const esp_err_t err = text != nullptr ? scripts::source(argv[2], text, px::effects::glow::kMaxSource + 1, length)
+                                              : ESP_ERR_NO_MEM;
+        if (err == ESP_OK) {
+            std::fwrite(text, 1, length, stdout);
+            std::printf("\n");
+        }
+        px::memory::release_large(text);
+        return check(err);
+    }
+    if (std::strcmp(sub, "dis") == 0 && argc == 3) {
+        return check(scripts::disassemble(
+            argv[2], [](const char *line, void *) { std::printf("%s\n", line); }, nullptr));
+    }
+    if (std::strcmp(sub, "run") == 0 && argc == 3) {
+        const int effect = scripts::find(argv[2]);
+        if (effect < 0) {
+            return check(ESP_ERR_NOT_FOUND);
+        }
+        px::leds::set_effect(static_cast<size_t>(effect));
+        return 0;
+    }
+    return usage("script [list] | show <slug> | dis <slug> | run <slug>");
+}
+#endif
+
 esp_err_t add(const char *name, const char *help, const char *hint, esp_console_cmd_func_t func)
 {
     esp_console_cmd_t command{};
@@ -1545,11 +1627,15 @@ void register_commands()
         cmd_light);
     add("input", "the buttons and the encoder: pins, what is pressed, the actions", nullptr, cmd_input);
     add("mqtt", "MQTT: the state and the settings", "[set on|off <uri> <prefix> <base> <user>]", cmd_mqtt);
-    add("leds", "the LEDs: state, layout, and output tests", "[status] | on | off | bright <n> | effect [<name>] | color <r> <g> <b> | speed <n> | palette [<name>] | preset [<name>|next|save|delete] | rotate <deg> | reactive on|off | strength <n> | attack <ms> | release <ms> | crossfade <ms> | poweron restore|off|on | overlay off|clock|text ... | limit <mW> | driver rmt|parallel | dither on|off | fps <n> | autooff on|off|<min> | lane [<n> ...] | canvas <w> <h> | panel ... | layout | setup <counts...> | fill | px | bench [n|encode] | lanes | resume", cmd_leds);
+    add("leds", "the LEDs: state, layout, and output tests", "[status] | on | off | bright <n> | effect [<name>|next|prev] | color <r> <g> <b> | speed <n> | palette [<name>] | preset [<name>|next|save|delete] | rotate <deg> | reactive on|off | strength <n> | attack <ms> | release <ms> | crossfade <ms> | poweron restore|off|on | overlay off|clock|text ... | limit <mW> | driver rmt|parallel | dither on|off | fps <n> | autooff on|off|<min> | lane [<n> ...] | canvas <w> <h> | panel ... | layout | setup <counts...> | fill | px | bench [n|encode] | lanes | resume", cmd_leds);
     add("relay", "the LED power switch: the state, or switched", "[status|<n> on|off]", cmd_relay);
     add("motion", "motion sensor: the state", "[status]", cmd_motion);
     add("audio", "microphone: the analysis and its settings",
         "[status|watch [s]|set gain|agc|silence|range|beat|warls|port|wled <value>]", cmd_audio);
+#if CONFIG_PX_SCRIPTS
+    add("script", "the Glow scripts: the list, a source, its program, show one", "[list] | show|dis|run <slug>",
+        cmd_script);
+#endif
 }
 
 // The console's own task: created at the start, so its stack is taken while the internal RAM is

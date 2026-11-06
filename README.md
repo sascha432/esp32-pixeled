@@ -39,6 +39,9 @@ Built:
   stored and restored.
 * Animations after WLED's 2D ones: colored bursts, blobs, distortion waves, waverly and the
   particle ones PS vortex, fuzzy noise, waterfall, GEQ 2D, GEQ nova, ghost rider, blobs, galaxy.
+* A second set after WLED's: DNA spiral, drift, drift rose, Fire 2012, firenoise, fireworks,
+  fireworks 1D, ghost rider, hiphotic, octopus, Julia, Lissajous, polar lights, scrolling text
+  (the overlay's text or the time and date), sindots, soap, sun radiation.
 * Each animation turns by 0, 90, 180 or 270 degrees; all but solid react to sound with their own
   switch, strength, attack and release.
 * Palettes for the animations with colors of their own (rainbow, party, ocean, forest, lava,
@@ -46,6 +49,13 @@ Built:
 * Presets: up to 16 named lights (animation, color, speed, brightness, style) on LittleFS, in the
   backup's presets part.
 * Text and clock overlay over every animation (5 x 7 font with umlauts, scrolling).
+* Scripts: animations in Glow ([docs/glow.md](docs/glow.md)), written on the web UI's Scripts page,
+  compiled on the device, run 32 pixels at once; up to 16 kept on LittleFS, only the one shown in
+  RAM; listed like the animations (presets, buttons, Home Assistant), with their own sliders and in
+  the backup; twelve examples, seven of them built-in animations as scripts.
+  An option (`CONFIG_PX_SCRIPTS`): off, the firmware has none of it.
+* Animations left out of the lists (LED settings): not in Control's list, Home Assistant's effects
+  or the buttons' steps.
 * At power on: as before, off or on.
 * Web, the LED pages: Control (live preview, the light, its state, presets, overlay), Sound (the
   bands live, UDP inputs, microphone), LED settings (power and timing, motion), Layout, Buttons.

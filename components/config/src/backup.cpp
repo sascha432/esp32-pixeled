@@ -92,13 +92,23 @@ void Report::note(std::string_view where, std::string_view message)
 
 // ------------------------------------------------------------------------------------ Writer
 
+void Writer::spill()
+{
+    if (_sink != nullptr && _out.size() >= 1024) {
+        _sink({_out.data(), _out.size()}, _context);
+        _out.clear();
+        _spilled = true;
+    }
+}
+
 void Writer::section(std::string_view name)
 {
-    if (!_out.empty()) {
+    if (!_out.empty() || _spilled) {
         _out += '\n';
     }
     _out.append(name.data(), name.size());
     _out += ":\n";
+    spill();
 }
 
 void Writer::key(std::string_view key, int level, bool item)
@@ -117,6 +127,7 @@ void Writer::text(std::string_view key, std::string_view value, int level)
     _out += ' ';
     _out += yaml::quote(value);
     _out += '\n';
+    spill();
 }
 
 void Writer::number(std::string_view key, long value, int level)
@@ -127,12 +138,14 @@ void Writer::number(std::string_view key, long value, int level)
     _out += ' ';
     _out += text;
     _out += '\n';
+    spill();
 }
 
 void Writer::boolean(std::string_view key, bool value, int level)
 {
     this->key(key, level, false);
     _out += value ? " true\n" : " false\n";
+    spill();
 }
 
 void Writer::flow(std::string_view key, std::span<const std::string_view> words, int level)
@@ -144,12 +157,14 @@ void Writer::flow(std::string_view key, std::span<const std::string_view> words,
         _out.append(words[i].data(), words[i].size());
     }
     _out += "]\n";
+    spill();
 }
 
 void Writer::open(std::string_view key, int level)
 {
     this->key(key, level, false);
     _out += '\n';
+    spill();
 }
 
 void Writer::item(std::string_view key, std::string_view value, int level)
@@ -158,6 +173,7 @@ void Writer::item(std::string_view key, std::string_view value, int level)
     _out += ' ';
     _out += yaml::quote(value);
     _out += '\n';
+    spill();
 }
 
 void Writer::comment(std::string_view text, int level)
@@ -166,6 +182,7 @@ void Writer::comment(std::string_view text, int level)
     _out += "# ";
     _out.append(text.data(), text.size());
     _out += '\n';
+    spill();
 }
 
 // ------------------------------------------------------------------------------------ Fields
@@ -289,10 +306,11 @@ void Fields::finish()
 
 // ------------------------------------------------------------------------------------- file
 
-memory::String write(const Device &device, std::span<const Section> sections, bool settings, bool presets)
+namespace {
+
+void write_into(memory::String &out, Writer &writer, const Device &device, std::span<const Section> sections,
+                bool settings, bool presets)
 {
-    memory::String out;
-    Writer writer(out);
     out += text_of("format: ", kFormat, "\n");
     char version[16];
     std::snprintf(version, sizeof(version), "version: %ld\n", kVersion);
@@ -305,7 +323,27 @@ memory::String write(const Device &device, std::span<const Section> sections, bo
             section.write(writer);
         }
     }
+}
+
+} // namespace
+
+memory::String write(const Device &device, std::span<const Section> sections, bool settings, bool presets)
+{
+    memory::String out;
+    Writer writer(out);
+    write_into(out, writer, device, sections, settings, presets);
     return out;
+}
+
+void write(const Device &device, std::span<const Section> sections, bool settings, bool presets, Sink sink,
+           void *context)
+{
+    memory::String out;
+    Writer writer(out, sink, context);
+    write_into(out, writer, device, sections, settings, presets);
+    if (!out.empty()) {
+        sink({out.data(), out.size()}, context);
+    }
 }
 
 Report read(std::string_view text, std::span<const Section> sections, bool apply)

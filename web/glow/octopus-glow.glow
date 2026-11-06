@@ -1,0 +1,41 @@
+// Octopus as a script, like the built-in "Octopus": arms winding out from the middle, waving as a
+// wave runs out along them and turning slowly, the colors running in toward the middle. With
+// WLED's sliders the built-in one fixes: the legs and where the middle is. Each pixel's angle and
+// distance are worked out once (again when the middle moves) and kept in two grids.
+anim "Octopus (Glow)"
+param legs = 4 [1 .. 8 step 1] "Legs"
+param ox = 0 [-0.5 .. 0.5] "Offset X"
+param oy = 0 [-0.5 .. 0.5] "Offset Y"
+grid angle, dist
+var spin, shift, shown, bright, fresh, cx = -1, cy = -1
+
+frame {
+  // half a turn a second at the light's speed, up to half again with the sound
+  spin += dt * (1 + level / 2) / 2
+  // a beat moves the colors on an eighth, gliding there in a quarter second
+  if beat { shift += 0.125 }
+  shown += (shift - shown) * min(1, dt * 4)
+  bright = level > 0 ? 0.25 + level * 0.75 : 1
+  // the first frame, or the middle moved: the grids anew
+  fresh = cx != ox or cy != oy
+  cx = ox
+  cy = oy
+}
+
+pixel {
+  a = angle[x, y]
+  r = dist[x, y]
+  if fresh {
+    dx = x - (W - 1) * (0.5 + ox)
+    dy = y - (H - 1) * (0.5 + oy)
+    a = atan2(dy, dx)
+    // the longer half side is 0.5
+    r = min(1, hypot(dx, dy) / max(W, H))
+    angle[x, y] = a
+    dist[x, y] = r
+  }
+  // a wave running out along the arms bends them
+  bend = wave(r * 3 - spin * 2) / 4
+  arm = wave(a * legs + r / 2 + bend - spin)
+  pal(r * 2 + spin + shown, arm * arm * bright)
+}
