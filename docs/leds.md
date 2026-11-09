@@ -93,7 +93,8 @@ hand it a frame, get a callback when it is out. Behind it one backend per chip:
   memory for up to 8 lanes; they would not: at 8 bits the ESP32's I2S in LCD mode still takes one
   32-bit FIFO word per two samples (ESP-IDF's own i80 LCD driver for the ESP32 says so), and the
   ring made the memory small anyway. The default driver. I2S1 stays for the microphone.
-* **RMT**: one channel per lane, the IDF's encoder; the C3 and C6 have 2 TX channels. Without
+* **RMT**: one channel per lane, the IDF's encoder; the C3 and C6 have 2 TX channels, so the
+  layout offers them 2 lanes (`output::max_lanes()`). Without
   DMA (ESP32, C3) an interrupt refills the pulse memory every few pixels; a late refill ends the
   frame early and the LEDs show garbage. Seen on the ESP32 while the web UI polled: the interrupt
   waited for the flash. Built: the interrupt runs while the flash is busy

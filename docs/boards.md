@@ -15,7 +15,7 @@ follows it and changes in the same commit as a board, a variant or a pin. How to
 | `esp32_devkit.wled_controller_rev1_3` | WLED controller PCB rev 1.3 | ESP32, 4 MB, none | 4 | no |
 | `esp32c3_devkit` | Espressif ESP32-C3-DevKitM-1 | ESP32-C3, 4 MB, none | 2 (RMT) | as the AI-C3 |
 | `esp32c3_devkit.ai_c3_test` | AI-C3 (clone, example variant) | ESP32-C3, 4 MB, none | 2 | yes, COM14 |
-| `esp32c6_devkit` | Espressif ESP32-C6-DevKitC-1 | ESP32-C6, 8 MB (4 used), none | 4 pins, 2 with RMT | no |
+| `esp32c6_devkit` | Espressif ESP32-C6-DevKitC-1 | ESP32-C6, 8 MB (4 used), none | 4 pins, 2 with RMT | boots, on a C6 SuperMini |
 
 The pins are the defaults of a new device ([architecture.md](architecture.md) section 8). -1 or
 "–" is a part that is not there. Buttons go to GND (low while pressed); their actions are in
@@ -176,7 +176,14 @@ esptool: ESP32-C3 (QFN32) rev v0.4, 4 MB flash in the chip (XMC), no PSRAM, so i
 ## ESP32-C6: `esp32c6_devkit`
 
 4 lane pins; the RMT has 2 TX channels, so lanes 3 and 4 wait for the parallel output (PARLIO,
-not built).
+not built). Until then the firmware offers lanes 1 and 2.
+
+First run 2026-11-09 on an ESP32-C6 SuperMini (a clone: ESP32-C6FH4 rev v0.2, 4 MB flash in the
+chip, no PSRAM, one USB-C port with the C6's own USB, a WS2812 on GPIO 8): recovery, main and web
+UI boot, the console answers, the hotspot and the web server run, Wi-Fi connects; the board's
+WS2812 lights as lane 1 (GPIO 8 in the test variant). A board without a USB-UART chip
+needs the console on the USB port: `CONFIG_ESP_CONSOLE_USB_SERIAL_JTAG=y` in its variant's
+`sdkconfig.defaults`, else the console sits on UART0 and the USB port only shows the log.
 
 | Function | GPIO |
 | --- | --- |

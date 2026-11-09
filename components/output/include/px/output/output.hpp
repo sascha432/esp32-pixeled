@@ -46,6 +46,8 @@ esp_err_t start(const Lane *lanes, size_t count, Driver driver = Driver::Rmt);
 
 // the chip has a parallel output
 bool parallel_supported();
+// the most lanes the chip sends: those of the parallel output, else one per RMT channel (C3, C6: 2)
+size_t max_lanes();
 // the backend of the running output
 Driver driver();
 

@@ -46,6 +46,11 @@ bool parallel_supported()
     return detail::parallel::supported();
 }
 
+size_t max_lanes()
+{
+    return parallel_supported() ? detail::parallel::kMaxLanes : detail::rmt::max_lanes();
+}
+
 esp_err_t start(const Lane *lanes, size_t count, Driver driver)
 {
     stop();

@@ -132,6 +132,11 @@ size_t g_count = 0;
 
 } // namespace
 
+size_t max_lanes()
+{
+    return kMaxChannels;
+}
+
 esp_err_t start(const Lane *lanes, size_t count)
 {
     stop();

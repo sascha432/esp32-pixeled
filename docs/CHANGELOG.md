@@ -7,6 +7,15 @@ and what is gone under Removed. Updated in the same commit as the change ([CLAUD
 
 ## Unreleased (0.1.0)
 
+### 2026-11-09
+
+Fixed
+
+* The C6 offers 2 LED lanes, not 4: its RMT sends 2 until the parallel output (PARLIO) is built.
+  The layout page, the console and the backup counted the board's 4 pins; a layout with lane 3 or
+  4 stopped with "the outputs did not start", now it says "lane 3: this chip sends 2 lanes".
+  `available_lanes` in `/api/leds/layout` is the board's pins, at most what the chip sends.
+
 ### 2026-11-06
 
 Added

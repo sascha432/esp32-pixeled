@@ -2,6 +2,7 @@
 
 #include "px/leds/leds.hpp"
 
+#include <algorithm>
 #include <atomic>
 #include <cstdio>
 #include <cstring>
@@ -616,6 +617,16 @@ Style style_for(size_t effect)
 
 // ------------------------------------------------------------------------------------ layout
 
+// the lanes a layout can use: the board's pins, at most as many as the chip sends (C3, C6: 2)
+size_t usable_lanes()
+{
+    size_t pins = 0;
+    while (pins < t.start.lane_count && t.start.lane_gpios[pins] >= 0) {
+        pins++;
+    }
+    return std::min(pins, output::max_lanes());
+}
+
 void set_error(const char *text)
 {
     std::snprintf(t.error, sizeof(t.error), "%s", text);
@@ -666,6 +677,13 @@ void apply_layout()
         if (i >= t.start.lane_count || t.start.lane_gpios[i] < 0) {
             char text[48];
             std::snprintf(text, sizeof(text), "lane %u has no pin on this board", static_cast<unsigned>(i + 1));
+            set_error(text);
+            return;
+        }
+        if (i >= output::max_lanes()) {
+            char text[48];
+            std::snprintf(text, sizeof(text), "lane %u: this chip sends %u lanes", static_cast<unsigned>(i + 1),
+                          static_cast<unsigned>(output::max_lanes()));
             set_error(text);
             return;
         }
@@ -1322,10 +1340,7 @@ void publish()
     g_status.leds = static_cast<uint32_t>(t.table.leds);
     g_status.lanes = static_cast<uint8_t>(t.table.lanes);
     g_status.parallel = t.lanes_ready && output::driver() == output::Driver::Parallel;
-    g_status.available_lanes = 0;
-    for (size_t i = 0; i < t.start.lane_count && t.start.lane_gpios[i] >= 0; i++) {
-        g_status.available_lanes++;
-    }
+    g_status.available_lanes = static_cast<uint8_t>(usable_lanes());
     g_status.level = static_cast<uint8_t>(t.level >> 8);
     g_status.supply_on = t.supply_on;
     g_status.fps = t.fps;

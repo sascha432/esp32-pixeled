@@ -300,7 +300,8 @@ Above the preview the card "Lanes": one row per lane of the board with the color
 (255: as the others), red, green and blue (the color balance) and dithering; every change is saved
 at once (`GET /api/leds/lanes`, `POST /api/leds/lanes` with `lane` and any of `order`, `level`,
 `red`, `green`, `blue`, `dither`).
-API: `GET /api/leds/layout` (`width`, `height`, `available_lanes`, `max_panels`, `panels` with
+API: `GET /api/leds/layout` (`width`, `height`, `available_lanes` (the board's lane pins, at most
+what the chip sends: 2 on the C3 and C6), `max_panels`, `panels` with
 `lane`, `x`, `y`, `width`, `height`, `first` (`tl`, `tr`, `bl`, `br`), `runs` (`rows`, `columns`),
 `zigzag`), `POST /api/leds/layout` (`width`, `height`, `panels`: one panel per `;`, its fields in
 that order separated by `,`, `zigzag` or `straight` last).

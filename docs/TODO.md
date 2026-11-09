@@ -227,7 +227,7 @@ bytes). Not tried: the factory reset path (it erases the test board's settings).
 ## Phase 1: skeleton (done, to be tried on hardware)
 
 * Flash recovery and main on the S3, the ESP32, the C3 and the C6; first setup over the open
-  hotspot; `tools/test_web.py` against each.
+  hotspot; `tools/test_web.py` against each. The C6 booted 2026-11-09 (C6 test board below).
 * Headless recovery: built 2026-10-21 (architecture.md section 9.1): 5 minutes without Wi-Fi open
   the hotspot (password), the board's hotspot button held at boot opens it without one (button 4
   on the test board). Both tried 2026-10-22 (the button by the user, the 5 minutes with
@@ -336,6 +336,12 @@ bytes). Not tried: the factory reset path (it erases the test board's settings).
   variant `esp32c3_devkit.ai_c3_test` (in git, boards.md), 2026-10-22. Strips on lanes 1 and 2
   (GPIO 10, 4) light with RMT: 2 x 512 at 60 fps, about 2 x 600 for 50 fps. Open: the GPIO of its
   RGB LED (8?), the 5V pins with power from USB.
+* C6 test board: an ESP32-C6 SuperMini (C6FH4, 4 MB in the chip, only the C6's USB) on COM21,
+  a private variant `esp32c6_devkit.supermini` (console on USB-Serial/JTAG, lane 1 on the board's
+  WS2812, GPIO 8), 2026-11-09: recovery, main and web UI boot, console, hotspot, Wi-Fi, web
+  server, 209 KB internal RAM free; the WS2812 lights as lane 1 (checked by the user). Open: a
+  strip on lane 2, the LED on GPIO 15 (?), which of the DevKitC-1 pins reach the board's edge,
+  `tools/test_web.py`.
 * Recovery app sizes (2026-10-19): S3 0.93 MB, C3 0.99 MB, C6 1.07 MB. The 4 MB table's factory
   grew to 1.19 MB for the C6 (ota_0 2.25 MB). Shrink the recovery app (no TLS client? log level)
   before the main firmware with the LED engine needs the room.

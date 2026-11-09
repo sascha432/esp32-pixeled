@@ -17,6 +17,8 @@ namespace px::output::detail {
 void reorder(ColorOrder order, const uint8_t *rgb, uint8_t *out, size_t pixels);
 
 namespace rmt {
+// the chip's TX channels, one per lane
+size_t max_lanes();
 esp_err_t start(const Lane *lanes, size_t count);
 void stop();
 esp_err_t show(const uint8_t *rgb, uint32_t timeout_ms);
