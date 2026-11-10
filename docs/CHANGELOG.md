@@ -9,6 +9,13 @@ and what is gone under Removed. Updated in the same commit as the change ([CLAUD
 
 ### 2026-11-09
 
+Added
+
+* The example variant `esp32c6_devkit.supermini` ([boards.md](boards.md)): the ESP32-C6 SuperMini,
+  a board with only the C6's own USB. Its `sdkconfig.defaults` moves the console to the USB port
+  (`CONFIG_ESP_CONSOLE_USB_SERIAL_JTAG=y`), lane 1 is the board's WS2812 on GPIO 8. The first C6
+  the firmware ran on.
+
 Fixed
 
 * The C6 offers 2 LED lanes, not 4: its RMT sends 2 until the parallel output (PARLIO) is built.

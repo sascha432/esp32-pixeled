@@ -53,7 +53,7 @@ update for another board is refused by it.
 One unit's add-ons or other wiring: a directory `boards/<board>/variants/<variant>/` (lower
 case, digits and `_`; private, not in git, except the public WLED controller PCBs
 `esp32_devkit.wled_controller_rev1_1` and `esp32_devkit.wled_controller_rev1_3` and the examples
-`esp32s3_devkit.ai_s3_test` and `esp32c3_devkit.ai_c3_test`) with
+`esp32s3_devkit.ai_s3_test`, `esp32c3_devkit.ai_c3_test` and `esp32c6_devkit.supermini`) with
 
 * `px_board_variant.hpp`: a copy of `components/board/src/variant/px_board_variant.hpp` whose
   `apply()` changes the fields of `Info` that differ (other LED pins, a relay, a motion sensor);
@@ -61,7 +61,9 @@ case, digits and `_`; private, not in git, except the public WLED controller PCB
 * `sdkconfig.defaults` (optional): Kconfig options of this unit only, the last layer. A unit
   without the scripts (no code, no RAM of them, [glow.md](glow.md)) gets
   `# CONFIG_PX_SCRIPTS is not set`, one with fewer of them `CONFIG_PX_SCRIPT_SLOTS=4` (1 to 16,
-  16 by default; a script takes RAM only while it is shown).
+  16 by default; a script takes RAM only while it is shown). A board without a USB-UART chip
+  (only the chip's own USB) gets `CONFIG_ESP_CONSOLE_USB_SERIAL_JTAG=y`, else the console sits on
+  UART0 and the USB port only shows the log (the example `esp32c6_devkit.supermini`).
 
 `python tools/build.py <board>.<variant>` builds it in `build/<board>.<variant>/<app>`. The image
 tag stays the board's: a variant takes the board's updates and the other way round, so update
@@ -70,4 +72,5 @@ with the variant's own build.
 ## Clones
 
 A clone of a supported dev kit runs that board's firmware; its own pins go into a variant. The
-clones in git (AI-S3, AI-C3) are in [boards.md](boards.md) with photos and pin headers.
+clones in git (AI-S3, AI-C3, C6 SuperMini) are in [boards.md](boards.md) with photos and pin
+headers.

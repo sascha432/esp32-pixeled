@@ -15,7 +15,8 @@ follows it and changes in the same commit as a board, a variant or a pin. How to
 | `esp32_devkit.wled_controller_rev1_3` | WLED controller PCB rev 1.3 | ESP32, 4 MB, none | 4 | no |
 | `esp32c3_devkit` | Espressif ESP32-C3-DevKitM-1 | ESP32-C3, 4 MB, none | 2 (RMT) | as the AI-C3 |
 | `esp32c3_devkit.ai_c3_test` | AI-C3 (clone, example variant) | ESP32-C3, 4 MB, none | 2 | yes, COM14 |
-| `esp32c6_devkit` | Espressif ESP32-C6-DevKitC-1 | ESP32-C6, 8 MB (4 used), none | 4 pins, 2 with RMT | boots, on a C6 SuperMini |
+| `esp32c6_devkit` | Espressif ESP32-C6-DevKitC-1 | ESP32-C6, 8 MB (4 used), none | 4 pins, 2 with RMT | as the C6 SuperMini |
+| `esp32c6_devkit.supermini` | C6 SuperMini (clone, example variant) | ESP32-C6, 4 MB, none | 2 (lane 1: its WS2812) | yes, COM21 |
 
 The pins are the defaults of a new device ([architecture.md](architecture.md) section 8). -1 or
 "–" is a part that is not there. Buttons go to GND (low while pressed); their actions are in
@@ -176,14 +177,7 @@ esptool: ESP32-C3 (QFN32) rev v0.4, 4 MB flash in the chip (XMC), no PSRAM, so i
 ## ESP32-C6: `esp32c6_devkit`
 
 4 lane pins; the RMT has 2 TX channels, so lanes 3 and 4 wait for the parallel output (PARLIO,
-not built). Until then the firmware offers lanes 1 and 2.
-
-First run 2026-11-09 on an ESP32-C6 SuperMini (a clone: ESP32-C6FH4 rev v0.2, 4 MB flash in the
-chip, no PSRAM, one USB-C port with the C6's own USB, a WS2812 on GPIO 8): recovery, main and web
-UI boot, the console answers, the hotspot and the web server run, Wi-Fi connects; the board's
-WS2812 lights as lane 1 (GPIO 8 in the test variant). A board without a USB-UART chip
-needs the console on the USB port: `CONFIG_ESP_CONSOLE_USB_SERIAL_JTAG=y` in its variant's
-`sdkconfig.defaults`, else the console sits on UART0 and the USB port only shows the log.
+not built). Until then the firmware offers lanes 1 and 2. Tested on the C6 SuperMini (below).
 
 | Function | GPIO |
 | --- | --- |
@@ -197,3 +191,33 @@ needs the console on the USB port: `CONFIG_ESP_CONSOLE_USB_SERIAL_JTAG=y` in its
 
 Not usable: 24 to 30 (flash), 12 and 13 (USB), 16 and 17 (UART0), 4, 5, 8, 9 and 15 (strapping; 8
 drives the board's RGB LED, 9 is BOOT).
+
+### C6 SuperMini: `esp32c6_devkit.supermini`
+
+A small purple no-name ESP32-C6 board, sold as "ESP32 SuperMini" (also with a C3, S3 or H2): an
+ESP32-C6FH4 chip, one USB-C port (the C6's own USB on GPIO 12 and 13, no USB-UART chip), RST and
+BOOT buttons, a WS2812 RGB LED. Read with esptool: ESP32-C6FH4 (QFN32) rev v0.2, 4 MB flash in the
+chip, no PSRAM, 40 MHz crystal, so it runs `esp32c6_devkit`. It came with an Arduino sketch. The
+variant is in git as an example of a variant for a board without a USB-UART chip. Photo: to be
+added.
+
+| Function | GPIO |
+| --- | --- |
+| LED lane 1 | 8 (the board's WS2812) |
+| LED lanes 2 to 4 | 19, 20, 21 (as the DevKitC-1; 3 and 4 wait for PARLIO) |
+| LED supply, motion sensor, I2C, LDR | 22, 23, 6 and 7, 1 (as the DevKitC-1) |
+| Button 1 (BOOT, the hotspot button) | 9 |
+| LED (not driven) | 15? (not checked) |
+| Microphone | – |
+
+* The console: the variant's `sdkconfig.defaults` sets `CONFIG_ESP_CONSOLE_USB_SERIAL_JTAG=y`, so
+  the console answers on the USB port. With the board's defaults it sits on UART0 (GPIO 16 and
+  17, not connected to USB) and the USB port only shows the log.
+* Lane 1 on the board's WS2812 is for a first test without a strip. GPIO 8 is a strapping pin; the
+  RMT lets go of it at a reset. The WS2812 keeps its last color while it has power, through
+  resets and flashing, until something sends it a new one.
+* Which of the DevKitC-1 pins (19 to 23, 6, 7, 1) reach the board's edge is not checked yet.
+* Tested 2026-11-09 (COM21): recovery, main and web UI flashed; the console answers on the USB
+  port, the hotspot, Wi-Fi and the web server run, 209 KB internal RAM free; the WS2812 lights as
+  lane 1 (checked by the user). Open: a strip on lane 2, the pins at the edge, the LED on GPIO 15,
+  a photo.

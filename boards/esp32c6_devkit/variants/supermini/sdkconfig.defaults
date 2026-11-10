@@ -1,0 +1,3 @@
+# ESP32-C6 SuperMini: no USB-UART chip, only the C6's own USB (GPIO 12, 13). The console goes
+# there, else it would be on UART0 (GPIO 16, 17) with the USB port output only.
+CONFIG_ESP_CONSOLE_USB_SERIAL_JTAG=y
